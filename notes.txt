@@ -1,0 +1,10 @@
+Mission 1
+ * Could use same dataset as below
+
+
+Mission 2
+ * Create a dataset to train a YOLO model to recognize paper plates
+   - Take videos of paper plates(many frames per second)
+   - Need to consider lighting/environment changes
+
+Fly drone to target?? --> are we responsible for this
