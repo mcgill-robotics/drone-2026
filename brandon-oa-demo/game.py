@@ -37,9 +37,9 @@ class Game:
 
     def update(self):
         self.player.follow_course(self.course, self.course_is_closed)
-        for obstacle in self.obstacles:
-            obstacle.move()
-        self.check_collisions()
+        # for obstacle in self.obstacles:
+            # obstacle.move()
+        # self.check_collisions()
 
     def check_collisions(self):
         for obstacle in self.obstacles:
