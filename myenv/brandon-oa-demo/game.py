@@ -42,7 +42,25 @@ class Game:
                     self.show_fields = not self.show_fields
 
     def update(self):
-        self.player.follow_course(self.course, self.course_is_closed)
+        # Determine goal: last waypoint or first waypoint if closed
+        goal = None
+        if self.course:
+            if self.course_is_closed:
+                goal = self.course[0]  # Return to start if closed
+            else:
+                goal = self.course[-1]  # Move to last clicked point
+        
+        # Update player with field forces
+        if goal:
+            self.player.update_with_field(goal, self.obstacles)
+        
+        # Optional: Check if player reached goal
+        if goal:
+            distance_to_goal = math.hypot(self.player.x - goal[0], self.player.y - goal[1])
+            if distance_to_goal < 10:  # Within 10 pixels of goal
+                # Could trigger something here (next waypoint, level complete, etc.)
+                pass
+        
         # for obstacle in self.obstacles:
             # obstacle.move()
         # self.check_collisions()
