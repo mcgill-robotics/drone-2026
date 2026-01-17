@@ -1,6 +1,6 @@
 # drone-2026
 Welcome to the McGill Drone 2026 repository!
-Head to the wiki for setup documentation and general info.
+Head to the [wiki](https://github.com/mcgill-robotics/drone-2026/wiki) for setup documentation and general info.
 
 
 # Who we are
