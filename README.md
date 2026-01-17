@@ -1,4 +1,4 @@
-# LiDAR → Image Click-to-Measure (User Guide + Algorithm)
+# LiDAR → Image Click-to-Measure
 
 You load:
 - a camera frame (e.g., SIYI R1M image)
