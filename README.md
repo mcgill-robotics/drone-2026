@@ -21,7 +21,7 @@ The objective of this task is to reconnoiter a site and deliver firefighting equ
 - Maintenance: Battery swaps are prohibited during this task. 
 ## Task 2: Fire Extinguishing
 The objective of this task is to extinguish small indoor and outdoor blazes while demonstrating system autonomy. 
-###General Overview
+### General Overview
 - Target Types: Targets are paper circles (5cm to 30cm in diameter) located both outdoors and inside a building. 
 - Extinguishing Criteria: A target is "extinguished" when wetted by the UAS across a 2cm wide area. 
 - Verification: Operators must declare a target extinguished and provide a photo in real time to judges for confirmation. 
