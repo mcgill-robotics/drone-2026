@@ -1,7 +1,7 @@
 # Use the official OSRF ROS 2 Humble Desktop Full image.
 # This base image includes Ubuntu 22.04 (Jammy) and all core ROS 2 tools,
 # including RViz and rqt, which saves significant build time.
-FROM osrf/ros:humble-desktop-full-jammy
+FROM ros:humble-ros-base
 
 # Define arguments for creating a non-root user (best practice)
 ARG USERNAME=devuser
