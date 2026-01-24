@@ -4,6 +4,7 @@ import math
 from settings import SCREEN_WIDTH, SCREEN_HEIGHT, WHITE, FPS, BLACK, GREEN
 from player import Player
 from obstacle import Obstacle
+from wall_obstacle import WallObstacle
 from field import Field
 
 class Game:
@@ -22,6 +23,55 @@ class Game:
         # Field visualization settings
         self.show_fields = True  # Toggle with 'F' key
         self.field_resolution = 30  # Grid spacing for visualization
+        
+        # Local minimum trap (U-shaped obstacle)
+        self.show_trap = True  # Toggle with 'T' key
+        self.trap_obstacles = self.create_trap_obstacles()
+
+    def create_trap_obstacles(self):
+        """Create U-shaped trap obstacles that form a local minimum"""
+        # Position the trap in the center-left area
+        trap_center_x = SCREEN_WIDTH // 3
+        trap_center_y = SCREEN_HEIGHT // 2
+        
+        # Wall dimensions
+        wall_length = 150
+        wall_thickness = 30
+        
+        trap_walls = []
+        
+        # Bottom wall
+        trap_walls.append(WallObstacle(
+            trap_center_x, 
+            trap_center_y + wall_length // 2, 
+            wall_length, 
+            wall_thickness
+        ))
+        
+        # Top wall
+        trap_walls.append(WallObstacle(
+            trap_center_x, 
+            trap_center_y - wall_length // 2, 
+            wall_length, 
+            wall_thickness
+        ))
+        
+        # Right wall (back of the U)
+        trap_walls.append(WallObstacle(
+            trap_center_x + wall_length // 2, 
+            trap_center_y, 
+            wall_thickness, 
+            wall_length + wall_thickness
+        ))
+        
+        return trap_walls
+
+    def get_all_obstacles(self):
+        """Get all obstacles including trap if enabled"""
+        all_obstacles = self.obstacles.copy()
+        if self.show_trap:
+            all_obstacles.extend(self.trap_obstacles)
+        return all_obstacles
 
     def handle_events(self):
         for event in pygame.event.get():
@@ -40,6 +90,8 @@ class Game:
                     self.course_is_closed = False
                 if event.key == pygame.K_f:
                     self.show_fields = not self.show_fields
+                if event.key == pygame.K_t:
+                    self.show_trap = not self.show_trap
 
     def update(self):
         # Determine goal: last waypoint or first waypoint if closed
@@ -50,9 +102,9 @@ class Game:
             else:
                 goal = self.course[-1]  # Move to last clicked point
         
-        # Update player with field forces
+        # Update player with field forces (including trap if enabled)
         if goal:
-            self.player.update_with_field(goal, self.obstacles)
+            self.player.update_with_field(goal, self.get_all_obstacles())
         
         # Optional: Check if player reached goal
         if goal:
@@ -83,6 +135,8 @@ class Game:
         
         goal = self.course[-1] if not self.course_is_closed else self.course[0]
         
+        all_obstacles = self.get_all_obstacles()
+        
         for x in range(0, SCREEN_WIDTH, self.field_resolution):
             for y in range(0, SCREEN_HEIGHT, self.field_resolution):
                 position = (x, y)
@@ -96,11 +150,19 @@ class Game:
                 total_fy += fy
                 
                 # Repulsive forces from obstacles
-                for obstacle in self.obstacles:
+                for obstacle in all_obstacles:
+                    # Handle both circular obstacles and rectangular trap walls
+                    if hasattr(obstacle, 'is_trap') and obstacle.is_trap:
+                        # For rectangular trap walls, use max dimension
+                        radius = max(obstacle.width, obstacle.height) / 2
+                    else:
+                        # For circular obstacles
+                        radius = obstacle.width / 2
+                    
                     fx, fy = Field.calculate_repulsive_force(
                         position, 
                         obstacle.rect.center, 
-                        obstacle.width / 2,
+                        radius,
                         strength=5000,
                         influence_distance=100
                     )
@@ -146,8 +208,26 @@ class Game:
             pygame.draw.circle(self.screen, color, point, 5)
         
         self.player.draw(self.screen)
+        
+        # Draw regular obstacles
         for obstacle in self.obstacles:
             obstacle.draw(self.screen)
+        
+        # Draw trap obstacles if enabled
+        if self.show_trap:
+            for trap_obstacle in self.trap_obstacles:
+                trap_obstacle.draw(self.screen)
+
+        # Draw UI hints
+        font = pygame.font.Font(None, 24)
+        hints = [
+            f"F: Toggle Fields ({'ON' if self.show_fields else 'OFF'})",
+            f"T: Toggle Trap ({'ON' if self.show_trap else 'OFF'})",
+            "C: Clear Course"
+        ]
+        for i, hint in enumerate(hints):
+            text = font.render(hint, True, BLACK)
+            self.screen.blit(text, (10, 10 + i * 25))
 
         pygame.display.flip()
 
