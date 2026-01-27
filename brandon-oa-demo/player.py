@@ -44,13 +44,22 @@ class Player:
         
         # Repulsive forces from all obstacles
         for obstacle in obstacles:
-            fx, fy = Field.calculate_repulsive_force(
-                position,
-                obstacle.rect.center,
-                obstacle.width / 2,
-                strength=self.repulsive_strength,
-                influence_distance=self.repulsive_influence_distance
-            )
+            # Handle rectangular trap walls differently from circular obstacles
+            if hasattr(obstacle, 'is_trap') and obstacle.is_trap:
+                fx, fy = Field.calculate_repulsive_force_rect(
+                    position,
+                    obstacle.rect,
+                    strength=self.repulsive_strength,
+                    influence_distance=self.repulsive_influence_distance
+                )
+            else:
+                fx, fy = Field.calculate_repulsive_force(
+                    position,
+                    obstacle.rect.center,
+                    obstacle.width / 2,
+                    strength=self.repulsive_strength,
+                    influence_distance=self.repulsive_influence_distance
+                )
             total_fx += fx
             total_fy += fy
         

@@ -151,21 +151,23 @@ class Game:
                 
                 # Repulsive forces from obstacles
                 for obstacle in all_obstacles:
-                    # Handle both circular obstacles and rectangular trap walls
+                    # Handle rectangular trap walls differently from circular obstacles
                     if hasattr(obstacle, 'is_trap') and obstacle.is_trap:
-                        # For rectangular trap walls, use max dimension
-                        radius = max(obstacle.width, obstacle.height) / 2
+                        fx, fy = Field.calculate_repulsive_force_rect(
+                            position,
+                            obstacle.rect,
+                            strength=5000,
+                            influence_distance=100
+                        )
                     else:
                         # For circular obstacles
-                        radius = obstacle.width / 2
-                    
-                    fx, fy = Field.calculate_repulsive_force(
-                        position, 
-                        obstacle.rect.center, 
-                        radius,
-                        strength=5000,
-                        influence_distance=100
-                    )
+                        fx, fy = Field.calculate_repulsive_force(
+                            position, 
+                            obstacle.rect.center, 
+                            obstacle.width / 2,
+                            strength=5000,
+                            influence_distance=100
+                        )
                     total_fx += fx
                     total_fy += fy
                 

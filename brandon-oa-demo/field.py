@@ -56,3 +56,41 @@ class Field:
         force_magnitude = strength / (edge_distance ** 2)
         
         return (direction_x * force_magnitude, direction_y * force_magnitude)
+    
+    @staticmethod
+    def calculate_repulsive_force_rect(position, rect, strength=100.0, influence_distance=150.0):
+        """Calculate repulsive force from a rectangular obstacle"""
+        px, py = position
+        
+        # Find closest point on rectangle to the position
+        closest_x = max(rect.left, min(px, rect.right))
+        closest_y = max(rect.top, min(py, rect.bottom))
+        
+        # Vector from closest point to position
+        dx = px - closest_x
+        dy = py - closest_y
+        distance = math.hypot(dx, dy)
+        
+        if distance == 0:
+            # Position is inside rectangle - push out from center
+            dx = px - rect.centerx
+            dy = py - rect.centery
+            distance = math.hypot(dx, dy)
+            if distance == 0:
+                return (0, 0)
+            direction_x = dx / distance
+            direction_y = dy / distance
+            return (direction_x * strength * 10, direction_y * strength * 10)
+        
+        if distance > influence_distance:
+            # Too far away - no influence
+            return (0, 0)
+        
+        # Normalize direction (away from obstacle)
+        direction_x = dx / distance
+        direction_y = dy / distance
+        
+        # Inverse square law for repulsion (1/d^2)
+        force_magnitude = strength / (distance ** 2)
+        
+        return (direction_x * force_magnitude, direction_y * force_magnitude)
