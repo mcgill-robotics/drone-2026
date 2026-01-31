@@ -5,32 +5,17 @@ import math
 
 
 class Obstacle:
-    def __init__(self):
-        self.width = 50
-        self.height = 50
-        self.color = RED
-        self.x = random.randint(0, SCREEN_WIDTH - self.width)
-        self.y = random.randint(0, SCREEN_HEIGHT - self.height)
-        self.speed = random.randint(3, 7)
-        self.rect = pygame.Rect(self.x, self.y, self.width, self.height)
-        self.DIAM = 50
-        self.CHARGE = -1
-        self.MASS = 10
-        
-    
+    def __init__(self, x, y, charge=500.0, diam=20.0):
+        self.p = pygame.Vector2(x, y)
+        self.charge = charge
+        self.diam = diam
+        self.mass = 1.0 
 
-    def move(self):
-        self.rect.y += self.speed
-        
-    def distanceSquared(self, player):
-        dx = self.rect.centerx - player.rect.centerx
-        dy = self.rect.centery - player.rect.centery
-        return dx * dx + dy * dy
+    def distance_sqr(self, robot):
+        return self.p.distance_sq_to(robot.pos)
 
-    def distance(self, player):
-        return math.hypot(self.rect.centerx - player.rect.centerx, self.rect.centery - player.rect.centery)
-
-        
+    def distance(self, robot):
+        return self.p.distance_to(robot.pos)
 
     def draw(self, surface):
-        pygame.draw.circle(surface, self.color, self.rect.center, self.width // 2)
+        pygame.draw.circle(surface, (200, 50, 50), (int(self.p.x), int(self.p.y)), int(self.diam / 2))

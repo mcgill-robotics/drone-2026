@@ -1,5 +1,5 @@
-from game import Game
+from simulation import Simulation
 
 if __name__ == "__main__":
-    game = Game()
-    game.run()
+    sim = Simulation()
+    sim.run()
