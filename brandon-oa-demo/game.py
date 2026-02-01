@@ -102,9 +102,12 @@ class Game:
             else:
                 goal = self.course[-1]  # Move to last clicked point
         
+        # Calculate delta time
+        dt = 1.0 / FPS
+        
         # Update player with field forces (including trap if enabled)
         if goal:
-            self.player.update_with_field(goal, self.get_all_obstacles())
+            self.player.update_with_field(goal, self.get_all_obstacles(), dt)
         
         # Optional: Check if player reached goal
         if goal:
