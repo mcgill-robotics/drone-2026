@@ -1,5 +1,5 @@
 Datasets used for testing:
-1. https://www.cvlibs.net/datasets/kitti/raw_data.php?type=city
+1. https://www.cvlibs.net/datasets/kitti/raw_data.php?type=city (Will have to make an account with school email to access datasets)
 2. Go to any raw data category except calibration(city, residential, road, campus, person)
 3. Download + extract synced+rectified data + calibration folders
 4. place the calibration .txt files in the [images date]_synced directory
