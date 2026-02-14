@@ -1,3 +1,11 @@
+Datasets used for testing:
+1. https://www.cvlibs.net/datasets/kitti/raw_data.php?type=city
+2. Go to any raw data category except calibration(city, residential, road, campus, person)
+3. Download + extract synced+rectified data + calibration folders
+4. place the calibration .txt files in the [images date]_synced directory
+5. Run:
+python[3] distance.py --seq [path to date_sync directory] --frame 0[or any other frame in the dataset] --show_overlay
+
 # LiDAR → Image Click-to-Measure
 
 You load:
