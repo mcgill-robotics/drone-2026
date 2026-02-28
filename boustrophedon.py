@@ -18,7 +18,7 @@ def _xy(pt) -> tuple[float, float]:
 
 def _build_safe_geometry(
     boundary_points: Sequence,
-    obstacle_bboxes: Sequence[Sequence[float]] | None,
+    obstacles: Sequence | None,
     clearance: float,
 ) -> geometry.base.BaseGeometry:
     coords = [_xy(p) for p in boundary_points]
@@ -30,17 +30,28 @@ def _build_safe_geometry(
     if safe.is_empty:
         raise ValueError(f"clearance={clearance} is too large; safe region becomes empty.")
 
-    if obstacle_bboxes:
-        boxes = []
-        for b in obstacle_bboxes:
-            if len(b) != 4:
-                raise ValueError("Each obstacle bbox must have 4 floats: [min_x, min_y, max_x, max_y].")
-            min_x, min_y, max_x, max_y = map(float, b)
-            if max_x < min_x or max_y < min_y:
-                raise ValueError(f"Invalid bbox with max < min: {b}")
-            boxes.append(geometry.box(min_x, min_y, max_x, max_y))
-        obstacles = geometry.MultiPolygon(boxes).buffer(clearance, join_style=2)
-        safe = safe.difference(obstacles)
+    if obstacles:
+        polys = []
+        for ob in obstacles:
+            if isinstance(ob, geometry.base.BaseGeometry):
+                poly = ob
+            else:
+                if not isinstance(ob, (list, tuple)) or len(ob) < 3:
+                    raise ValueError("Each obstacle must be a polygon (>=3 points) or a bbox with 4 floats.")
+                # Bbox: [min_x, min_y, max_x, max_y]
+                if len(ob) == 4 and all(isinstance(v, (int, float)) for v in ob):
+                    min_x, min_y, max_x, max_y = map(float, ob)
+                    if max_x < min_x or max_y < min_y:
+                        raise ValueError(f"Invalid bbox with max < min: {ob}")
+                    poly = geometry.box(min_x, min_y, max_x, max_y)
+                else:
+                    coords = [_xy(p) for p in ob]
+                    poly = geometry.Polygon(coords)
+            if poly.is_empty or not poly.is_valid:
+                raise ValueError(f"Obstacle polygon is empty or invalid: {ob}")
+            polys.append(poly)
+        obstacles_geom = geometry.MultiPolygon(polys).buffer(clearance, join_style=2)
+        safe = safe.difference(obstacles_geom)
         if safe.is_empty:
             raise ValueError("Obstacles + clearance remove all free space.")
 
@@ -294,7 +305,7 @@ def _plan_coverage_grid(
 
 def plan_boustrophedon(
     boundary_points: Sequence, # list of points (x, y) or objects with .x/.y
-    obstacle_bboxes: Sequence[Sequence[float]] | None = None, #list of [min_x, min_y, max_x, max_y] rectangles (inner obstacles)
+    obstacles: Sequence | None = None, # list of polygons (>=3 points), shapely geometries, or [min_x, min_y, max_x, max_y] bboxes
     *,
     spacing: float = 1.0,
     clearance: float = 0.0,
@@ -302,7 +313,7 @@ def plan_boustrophedon(
     start=None,
     goal=None,
 ):
-    safe_geom = _build_safe_geometry(boundary_points, obstacle_bboxes, clearance)
+    safe_geom = _build_safe_geometry(boundary_points, obstacles, clearance)
     occ, minx, miny = _rasterize_geometry(safe_geom, resolution)
 
     spacing_cells = max(1, int(round(spacing / resolution)))
@@ -358,7 +369,7 @@ def plan_boustrophedon(
     return cells_world, cell_paths_world, full_path_world
 
 
-def _plot_demo(boundary_points, obstacle_bboxes, cells, cell_paths, full_path, start=None, goal=None):
+def _plot_demo(boundary_points, obstacles, cells, cell_paths, full_path, start=None, goal=None):
     fig, ax = plt.subplots()
     ax.set_aspect("equal", "box")
 
@@ -368,18 +379,25 @@ def _plot_demo(boundary_points, obstacle_bboxes, cells, cell_paths, full_path, s
     ax.plot(bx + (bx[0],), by + (by[0],), color="black", linewidth=1)
 
     # obstacles
-    if obstacle_bboxes:
-        for b in obstacle_bboxes:
-            min_x, min_y, max_x, max_y = map(float, b)
-            rect = plt.Rectangle(
-                (min_x, min_y),
-                max_x - min_x,
-                max_y - min_y,
-                facecolor="red",
-                alpha=0.3,
-                edgecolor="darkred",
-            )
-            ax.add_patch(rect)
+    if obstacles:
+        for ob in obstacles:
+            if isinstance(ob, geometry.base.BaseGeometry):
+                poly = ob
+            else:
+                if len(ob) == 4 and all(isinstance(v, (int, float)) for v in ob):
+                    min_x, min_y, max_x, max_y = map(float, ob)
+                    poly = geometry.box(min_x, min_y, max_x, max_y)
+                else:
+                    poly = geometry.Polygon([_xy(p) for p in ob])
+            if poly.is_empty:
+                continue
+            if poly.geom_type == "Polygon":
+                x, y = poly.exterior.xy
+                ax.fill(x, y, alpha=0.3, color="red", edgecolor="darkred")
+            else:
+                for g in poly.geoms:
+                    x, y = g.exterior.xy
+                    ax.fill(x, y, alpha=0.3, color="red", edgecolor="darkred")
 
     # full path
     if full_path:
@@ -410,7 +428,7 @@ if __name__ == "__main__":
     obstacles = [
         [2.0, 2.0, 4.5, 4.0],
         [7.0, 1.0, 9.0, 3.5],
-        [5.5, 6.0, 8.0, 8.5],
+        [(5.5, 6.0), (8.0, 6.2), (7.5, 8.5)],
     ]
 
     start_pt = (1.0, 1.0)
