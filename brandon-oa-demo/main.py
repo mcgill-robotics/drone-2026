@@ -1,5 +1,8 @@
 from simulation import Simulation
 
-if __name__ == "__main__":
+def main():
     sim = Simulation()
     sim.run()
+
+if __name__ == "__main__":
+    main()

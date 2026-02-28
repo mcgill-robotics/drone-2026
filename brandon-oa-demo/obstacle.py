@@ -1,6 +1,5 @@
 import pygame
 import random
-from settings import SCREEN_WIDTH, SCREEN_HEIGHT, RED
 import math
 
 
