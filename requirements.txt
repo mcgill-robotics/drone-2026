@@ -1,0 +1,32 @@
+# -----------------------------------------------------------------------
+# Python pip dependencies for the drone vision pipeline
+#
+# ROS2 core packages (rclpy, sensor_msgs, std_msgs, std_srvs, cv_bridge)
+# are NOT installed via pip — install them through apt or rosdep:
+#
+#   sudo apt install ros-<distro>-cv-bridge ros-<distro>-image-transport
+#   rosdep install --from-paths src --ignore-src -r -y
+#
+# Tested with ROS2 Humble / Jazzy on Ubuntu 22.04+
+# -----------------------------------------------------------------------
+
+# Computer vision
+opencv-python>=4.8.0
+
+# Numerical computing (used heavily by CV and ML)
+numpy>=1.24.0
+
+# MAVLink / ArduPilot flight controller communication
+pymavlink>=2.4.41
+
+# YOLO object detection (for paper plate / target detection — Mission 2)
+ultralytics>=8.2.0       # includes YOLOv8 + YOLOv11
+
+# Image utilities
+Pillow>=10.0.0
+
+# (Optional) MAVProxy-style scripting / GCS integration
+# dronekit is Python 2 legacy — use pymavlink directly instead
+
+# (Optional) Serial port access if connecting FC via USB/UART
+pyserial>=3.5
