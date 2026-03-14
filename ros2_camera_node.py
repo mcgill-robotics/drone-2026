@@ -1,321 +1,200 @@
 #!/usr/bin/env python3
-"""
-ROS2 node for capturing images from the drone's RGB camera.
-Includes a tkinter GUI with live camera feed.
 
-Topics subscribed:
-    /camera/image_raw  (sensor_msgs/Image)
-
-Topics published:
-    /drone/capture_trigger  (std_msgs/Bool)
-
-Services:
-    /drone/capture_image  (std_srvs/Trigger)
-"""
-
+import argparse
+import math
 import os
-import threading
-import rclpy
-from rclpy.node import Node
-from sensor_msgs.msg import Image
-from std_msgs.msg import Bool
-from std_srvs.srv import Trigger
-from cv_bridge import CvBridge
+import time
 import cv2
-from PIL import Image as PILImage, ImageTk
-import tkinter as tk
+import numpy as np
 from datetime import datetime
 
-
 SAVE_DIR = os.path.expanduser("~/drone_images")
+WINDOW_NAME = "Drone Camera"
 
 
-# ──────────────────────────────────────────────────────────────────────────────
-# ROS2 Node
-# ──────────────────────────────────────────────────────────────────────────────
 
-class DroneCamera(Node):
-    def __init__(self):
-        super().__init__("drone_camera_node")
-
-        os.makedirs(SAVE_DIR, exist_ok=True)
-
-        self.bridge = CvBridge()
-        self.latest_frame = None
-        self.frame_count = 0
-        self._lock = threading.Lock()
-
-        self.declare_parameter("camera_topic", "/camera/image_raw")
-        self.declare_parameter("auto_capture_interval", 0.0)
-
-        camera_topic = self.get_parameter("camera_topic").get_parameter_value().string_value
-        interval = self.get_parameter("auto_capture_interval").get_parameter_value().double_value
-
-        self.image_sub = self.create_subscription(
-            Image, camera_topic, self.image_callback, 10
-        )
-        self.trigger_sub = self.create_subscription(
-            Bool, "/drone/capture_trigger", self.trigger_callback, 10
-        )
-        self.capture_srv = self.create_service(
-            Trigger, "/drone/capture_image", self.capture_service_callback
-        )
-
-        self._auto_timer = None
-        if interval > 0.0:
-            self._auto_timer = self.create_timer(interval, self.save_frame)
-
-        self.get_logger().info(f"Subscribed to: {camera_topic}")
-        self.get_logger().info(f"Saving images to: {SAVE_DIR}")
-
-    def image_callback(self, msg: Image):
-        try:
-            frame = self.bridge.imgmsg_to_cv2(msg, desired_encoding="bgr8")
-            with self._lock:
-                self.latest_frame = frame
-                self.frame_count += 1
-        except Exception as e:
-            self.get_logger().error(f"cv_bridge error: {e}")
-
-    def trigger_callback(self, msg: Bool):
-        if msg.data:
-            self.save_frame()
-
-    def capture_service_callback(self, request, response):
-        path = self.save_frame()
-        response.success = path is not None
-        response.message = f"Saved: {path}" if path else "No frame available"
-        return response
-
-    def get_frame(self):
-        """Thread-safe frame access for the GUI."""
-        with self._lock:
-            return self.latest_frame.copy() if self.latest_frame is not None else None
-
-    def save_frame(self) -> str | None:
-        frame = self.get_frame()
-        if frame is None:
-            self.get_logger().warn("No frame to save yet")
-            return None
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
-        path = os.path.join(SAVE_DIR, f"frame_{timestamp}.jpg")
-        cv2.imwrite(path, frame)
-        self.get_logger().info(f"Saved: {path}")
-        return path
-
-    def set_auto_capture(self, interval: float):
-        if self._auto_timer:
-            self._auto_timer.cancel()
-            self._auto_timer = None
-        if interval > 0.0:
-            self._auto_timer = self.create_timer(interval, self.save_frame)
-
-    def stop_auto_capture(self):
-        if self._auto_timer:
-            self._auto_timer.cancel()
-            self._auto_timer = None
+def gstreamer_pipeline(
+    sensor_id=0,
+    capture_width=1920, capture_height=1080,
+    display_width=1280, display_height=720,
+    framerate=30, flip_method=0,
+):
+    return (
+        f"nvarguscamerasrc sensor-id={sensor_id} "
+        f"exposuretimerange='13000 683709000' "
+        f"gainrange='1 16' "
+        f"ispdigitalgainrange='1 8' ! "
+        f"video/x-raw(memory:NVMM), width={capture_width}, height={capture_height}, "
+        f"framerate={framerate}/1 ! "
+        f"nvvidconv flip-method={flip_method} ! "
+        f"video/x-raw, width={display_width}, height={display_height}, format=BGRx ! "
+        f"videoconvert ! video/x-raw, format=BGR ! appsink drop=1"
+    )
 
 
-# ──────────────────────────────────────────────────────────────────────────────
-# GUI
-# ──────────────────────────────────────────────────────────────────────────────
+def open_camera(source, flip=0):
+    if source == "csi":
+        pipeline = gstreamer_pipeline(flip_method=flip)
+        print(f"[INFO] GStreamer: {pipeline}")
+        return cv2.VideoCapture(pipeline, cv2.CAP_GSTREAMER)
 
-class DroneCameraGUI:
-    FEED_W, FEED_H = 800, 500
-    REFRESH_MS = 33  # ~30 fps
+    elif source == "test":
+        return None
+    else:
+        cap = cv2.VideoCapture(int(source))
+        if cap.isOpened():
+            cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
+            cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
+        return cap
 
-    def __init__(self, root: tk.Tk, node: DroneCamera):
-        self.root = root
-        self.node = node
-        self.auto_active = False
 
-        root.title("Drone Camera Feed")
-        root.configure(bg="#1a1a2e")
-        root.resizable(False, False)
+def generate_test_frame(frame_count, width=1280, height=720):
+    frame = np.zeros((height, width, 3), dtype=np.uint8)
+    t = frame_count * 0.02
 
-        self._build_ui()
-        self._poll()
+    for i in range(0, width, 80):
+        for j in range(0, height, 80):
+            b = int(127 + 127 * math.sin(t + i * 0.01))
+            g = int(127 + 127 * math.sin(t + j * 0.01 + 2))
+            r = int(127 + 127 * math.sin(t + (i + j) * 0.005 + 4))
+            cv2.rectangle(frame, (i, j), (i + 80, j + 80), (b, g, r), -1)
 
-    # ── Layout ────────────────────────────────────────────────────────────────
+    cx = int(width / 2 + 200 * math.sin(t * 0.5))
+    cy = int(height / 2 + 100 * math.cos(t * 0.3))
+    cv2.circle(frame, (cx, cy), 60, (255, 255, 255), 3)
+    cv2.circle(frame, (cx, cy), 10, (0, 0, 255), -1)
+    cv2.putText(frame, "TEST PATTERN", (width // 2 - 150, 50),
+                cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0, 255, 255), 2)
 
-    def _build_ui(self):
-        PAD = 10
-        BG = "#1a1a2e"
-        PANEL = "#16213e"
-        ACCENT = "#0f3460"
-        GREEN = "#00d26a"
-        RED = "#e94560"
-        FG = "#e0e0e0"
+    return frame
 
-        # ── Header ──
-        header = tk.Frame(self.root, bg=ACCENT, pady=6)
-        header.pack(fill="x")
-        tk.Label(header, text="DRONE CAMERA", font=("Courier", 14, "bold"),
-                 bg=ACCENT, fg=GREEN).pack()
 
-        # ── Main area ──
-        main = tk.Frame(self.root, bg=BG)
-        main.pack(fill="both", expand=True, padx=PAD, pady=PAD)
+def save_frame(frame):
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+    path = os.path.join(SAVE_DIR, f"frame_{timestamp}.jpg")
+    cv2.imwrite(path, frame)
+    print(f"[SAVED] {path}")
+    return path
 
-        # Camera feed
-        feed_frame = tk.Frame(main, bg=PANEL, bd=2, relief="sunken")
-        feed_frame.pack(side="left")
 
-        self.canvas = tk.Canvas(feed_frame,
-                                width=self.FEED_W, height=self.FEED_H,
-                                bg="#000", highlightthickness=0)
-        self.canvas.pack()
+def draw_hud(display, frame_count, auto_active, auto_interval, status_msg, status_time, source):
+    h, w = display.shape[:2]
 
-        # Waiting label shown until first frame arrives
-        self._waiting_text = self.canvas.create_text(
-            self.FEED_W // 2, self.FEED_H // 2,
-            text="Waiting for camera...",
-            fill=GREEN, font=("Courier", 14)
-        )
+    overlay = display.copy()
+    cv2.rectangle(overlay, (0, 0), (w, 36), (15, 30, 60), -1)
+    cv2.addWeighted(overlay, 0.7, display, 0.3, 0, display)
 
-        # Sidebar controls
-        sidebar = tk.Frame(main, bg=BG, padx=PAD)
-        sidebar.pack(side="left", fill="y")
+    cv2.putText(display, "DRONE CAMERA", (10, 25),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 210, 106), 2)
 
-        def label(parent, text, **kw):
-            tk.Label(parent, text=text, bg=BG, fg=FG,
-                     font=("Courier", 9), **kw).pack(anchor="w", pady=(10, 2))
+    src_label = f"[{source.upper()}]"
+    cv2.putText(display, src_label, (220, 25),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 200, 255), 1)
 
-        def btn(parent, text, cmd, color=ACCENT):
-            tk.Button(parent, text=text, command=cmd,
-                      bg=color, fg=FG, activebackground=GREEN,
-                      font=("Courier", 10, "bold"),
-                      relief="flat", padx=10, pady=6,
-                      width=18).pack(fill="x", pady=2)
+    cv2.putText(display, f"Frames: {frame_count}", (w - 180, 25),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 200, 200), 1)
 
-        # Status
-        label(sidebar, "STATUS")
-        self.status_var = tk.StringVar(value="Connecting...")
-        tk.Label(sidebar, textvariable=self.status_var,
-                 bg=BG, fg=GREEN, font=("Courier", 10, "bold")).pack(anchor="w")
+    if auto_active:
+        cv2.putText(display, f"AUTO {auto_interval:.1f}s", (w - 350, 25),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 230), 2)
 
-        self.frame_var = tk.StringVar(value="Frames: 0")
-        tk.Label(sidebar, textvariable=self.frame_var,
-                 bg=BG, fg=FG, font=("Courier", 9)).pack(anchor="w")
+    overlay2 = display.copy()
+    cv2.rectangle(overlay2, (0, h - 30), (w, h), (15, 30, 60), -1)
+    cv2.addWeighted(overlay2, 0.7, display, 0.3, 0, display)
 
-        # Capture
-        label(sidebar, "CAPTURE")
-        btn(sidebar, "[ S ] Save Frame", self._capture, color=ACCENT)
+    cv2.putText(display, "[S] Save  [A] Auto-capture  [Q] Quit", (10, h - 10),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.4, (150, 150, 150), 1)
 
-        # Auto-capture
-        label(sidebar, "AUTO-CAPTURE INTERVAL (s)")
-        self.interval_var = tk.DoubleVar(value=1.0)
-        interval_spin = tk.Spinbox(
-            sidebar, from_=0.5, to=10.0, increment=0.5,
-            textvariable=self.interval_var, width=6,
-            font=("Courier", 10), bg=PANEL, fg=FG,
-            buttonbackground=ACCENT
-        )
-        interval_spin.pack(anchor="w", pady=2)
+    if status_msg and (time.time() - status_time) < 3.0:
+        cv2.putText(display, status_msg, (w - 400, h - 10),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 210, 106), 1)
 
-        self.auto_btn = tk.Button(
-            sidebar, text="START AUTO",
-            command=self._toggle_auto,
-            bg=GREEN, fg="#000",
-            activebackground=RED,
-            font=("Courier", 10, "bold"),
-            relief="flat", padx=10, pady=6, width=18
-        )
-        self.auto_btn.pack(fill="x", pady=2)
 
-        # Save location
-        label(sidebar, "SAVE DIRECTORY")
-        tk.Label(sidebar, text=SAVE_DIR, bg=BG, fg=FG,
-                 font=("Courier", 8), wraplength=170,
-                 justify="left").pack(anchor="w")
+def main():
+    parser = argparse.ArgumentParser(description="Drone Camera Node")
+    parser.add_argument("--source", default="csi",
+                        help="'csi' for RPi HQ Camera on Jetson (default), USB index, or 'test'")
+    parser.add_argument("--auto", type=float, default=0.0,
+                        help="Auto-capture interval in seconds (0 = disabled)")
+    parser.add_argument("--flip", type=int, default=0,
+                        help="Flip method: 0=none, 1=ccw90, 2=180, 3=cw90, 4=h-flip, 5=v-flip")
+    args = parser.parse_args()
 
-        # Keybinds hint
-        label(sidebar, "KEYBINDS")
-        for hint in ["s — save frame", "q — quit"]:
-            tk.Label(sidebar, text=hint, bg=BG, fg="#888",
-                     font=("Courier", 9)).pack(anchor="w")
+    os.makedirs(SAVE_DIR, exist_ok=True)
 
-        # Quit
-        tk.Frame(sidebar, bg=BG, height=20).pack()
-        btn(sidebar, "[ Q ] Quit", self.root.destroy, color=RED)
+    print(f"[INFO] Opening camera: {args.source}")
+    cap = open_camera(args.source, flip=args.flip)
+    test_mode = args.source == "test"
 
-        # ── Status bar ──
-        self.statusbar = tk.Label(
-            self.root, text="Ready", bd=1, relief="sunken",
-            anchor="w", bg=PANEL, fg=FG, font=("Courier", 9)
-        )
-        self.statusbar.pack(fill="x", side="bottom")
+    if not test_mode and (cap is None or not cap.isOpened()):
+        print(f"[WARN] Cannot open camera '{args.source}', falling back to test pattern")
+        test_mode = True
+        cap = None
 
-        # Keybinds
-        self.root.bind("<s>", lambda _: self._capture())
-        self.root.bind("<q>", lambda _: self.root.destroy())
+    if test_mode:
+        print("[INFO] Running in TEST PATTERN mode (no camera)")
+    else:
+        print(f"[INFO] Camera opened — {int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))}x{int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))}")
 
-    # ── Poll / update ─────────────────────────────────────────────────────────
+    print(f"[INFO] Saving to: {SAVE_DIR}")
+    print(f"[INFO] Keys: [S] save | [A] auto-capture | [Q] quit")
 
-    def _poll(self):
-        frame = self.node.get_frame()
+    frame_count = 0
+    auto_active = args.auto > 0
+    auto_interval = args.auto if args.auto > 0 else 2.0
+    last_auto_save = time.time()
+    status_msg = ""
+    status_time = 0.0
+    source_label = "test" if test_mode else args.source
 
-        if frame is not None:
-            if self._waiting_text is not None:
-                self.canvas.delete(self._waiting_text)
-                self._waiting_text = None
+    cv2.namedWindow(WINDOW_NAME, cv2.WINDOW_AUTOSIZE)
 
-            # Resize to fit canvas
-            rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            pil_img = PILImage.fromarray(rgb).resize(
-                (self.FEED_W, self.FEED_H), PILImage.LANCZOS
-            )
-            self._tk_img = ImageTk.PhotoImage(pil_img)
-            self.canvas.create_image(0, 0, anchor="nw", image=self._tk_img)
-
-            count = self.node.frame_count
-            self.status_var.set("LIVE")
-            self.frame_var.set(f"Frames: {count}")
-
-        self.root.after(self.REFRESH_MS, self._poll)
-
-    # ── Actions ───────────────────────────────────────────────────────────────
-
-    def _capture(self):
-        path = self.node.save_frame()
-        msg = f"Saved: {os.path.basename(path)}" if path else "No frame available"
-        self.statusbar.config(text=msg)
-
-    def _toggle_auto(self):
-        if self.auto_active:
-            self.node.stop_auto_capture()
-            self.auto_btn.config(text="START AUTO", bg="#00d26a", fg="#000")
-            self.statusbar.config(text="Auto-capture stopped")
-            self.auto_active = False
+    while True:
+        if test_mode:
+            frame = generate_test_frame(frame_count)
+            ret = True
+            time.sleep(0.033)
         else:
-            interval = self.interval_var.get()
-            self.node.set_auto_capture(interval)
-            self.auto_btn.config(text="STOP AUTO", bg="#e94560", fg="#fff")
-            self.statusbar.config(text=f"Auto-capture every {interval}s")
-            self.auto_active = True
+            ret, frame = cap.read()
 
+        if not ret:
+            print("[ERROR] Failed to read frame")
+            break
 
-# ──────────────────────────────────────────────────────────────────────────────
-# Entry point
-# ──────────────────────────────────────────────────────────────────────────────
+        frame_count += 1
 
-def main(args=None):
-    rclpy.init(args=args)
-    node = DroneCamera()
+        if auto_active and (time.time() - last_auto_save) >= auto_interval:
+            path = save_frame(frame)
+            status_msg = f"Auto-saved: {os.path.basename(path)}"
+            status_time = time.time()
+            last_auto_save = time.time()
 
-    # Spin ROS2 in a background thread so the GUI stays responsive
-    ros_thread = threading.Thread(target=rclpy.spin, args=(node,), daemon=True)
-    ros_thread.start()
+        display = frame.copy()
+        draw_hud(display, frame_count, auto_active, auto_interval, status_msg, status_time, source_label)
+        cv2.imshow(WINDOW_NAME, display)
 
-    root = tk.Tk()
-    DroneCameraGUI(root, node)
+        key = cv2.waitKey(1) & 0xFF
 
-    try:
-        root.mainloop()
-    finally:
-        node.destroy_node()
-        rclpy.shutdown()
+        if key == ord("q"):
+            break
+        elif key == ord("s"):
+            path = save_frame(frame)
+            status_msg = f"Saved: {os.path.basename(path)}"
+            status_time = time.time()
+        elif key == ord("a"):
+            auto_active = not auto_active
+            state = "ON" if auto_active else "OFF"
+            status_msg = f"Auto-capture {state} ({auto_interval:.1f}s)"
+            status_time = time.time()
+            last_auto_save = time.time()
+            print(f"[INFO] Auto-capture: {state}")
+
+    if cap is not None:
+        cap.release()
+    cv2.destroyAllWindows()
+    print("[INFO] Done.")
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())
