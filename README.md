@@ -11,7 +11,7 @@ Troubleshooting Camera:
  * Use arrow keys to highlight + select Camer IMX477-C
  * Click save changes and reset
 
- * OR try:
+OR try:
  * power off the Jetson
  * wait ~20 seconds for the power to cool down
  * Unplug power connector + disconnect/reconnect camera from Jetson
