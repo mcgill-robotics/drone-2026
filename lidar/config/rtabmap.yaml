@@ -1,0 +1,43 @@
+# RTAB-Map settings for 3D LiDAR SLAM.
+# The configuration uses point cloud input and ICP-based registration.
+
+rtabmap:
+  ros__parameters:
+    frame_id: base_link
+    odom_frame_id: odom
+    map_frame_id: map
+    subscribe_scan_cloud: true
+    subscribe_depth: false
+    subscribe_rgb: false
+    approx_sync: true
+
+    # ICP odometry parameters for LiDAR-only motion estimation.
+    Icp/VoxelSize: "0.1"
+    Icp/MaxCorrespondenceDistance: "1.0"
+    Icp/PointToPlane: "true"
+    Icp/Iterations: "30"
+
+    # RTAB-Map core parameters.
+    Rtabmap/DetectionRate: "1.0"
+    Rtabmap/CreateIntermediateNodes: "false"
+    RGBD/NeighborLinkRefining: "true"
+    RGBD/ProximityBySpace: "true"
+    RGBD/OptimizeFromGraphEnd: "false"
+    Reg/Strategy: "1"
+    Grid/CellSize: "0.1"
+    Grid/RangeMax: "50.0"
+    Grid/ClusterRadius: "1.0"
+    Grid/3D: "true"
+
+icp_odometry:
+  ros__parameters:
+    frame_id: base_link
+    odom_frame_id: odom
+    publish_tf: true
+    wait_for_transform: 0.2
+    Icp/VoxelSize: "0.1"
+    Icp/MaxCorrespondenceDistance: "1.0"
+    Icp/PointToPlane: "true"
+    Odom/Strategy: "0"
+    OdomF2M/ScanMaxSize: "15000"
+    OdomF2M/ScanSubtractRadius: "0.1"

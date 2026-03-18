@@ -1,0 +1,31 @@
+# Extended Kalman Filter settings for MAVROS IMU and odometry fusion.
+# The filter publishes the odom -> base_link transform used by the mapping stack.
+
+ekf_filter_node:
+  ros__parameters:
+    frequency: 30.0
+    two_d_mode: false
+    publish_tf: true
+    map_frame: map
+    odom_frame: odom
+    base_link_frame: base_link
+    world_frame: odom
+
+    # IMU input from the flight controller via MAVROS.
+    imu0: /mavros/imu/data
+    imu0_config: [false, false, false,   # x, y, z position
+                  true,  true,  true,    # roll, pitch, yaw
+                  false, false, false,   # x, y, z velocity
+                  true,  true,  true,    # roll, pitch, yaw rate
+                  true,  true,  true]    # x, y, z acceleration
+    imu0_differential: false
+    imu0_remove_gravitational_acceleration: true
+
+    # Odometry input from the flight controller via MAVROS.
+    odom0: /mavros/local_position/odom
+    odom0_config: [true,  true,  true,   # x, y, z position
+                   false, false, false,   # roll, pitch, yaw
+                   true,  true,  true,    # x, y, z velocity
+                   false, false, false,   # roll, pitch, yaw rate
+                   false, false, false]   # x, y, z acceleration
+    odom0_differential: false

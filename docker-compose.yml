@@ -1,0 +1,36 @@
+x-common: &common
+  build: .
+  container_name: suas-lidar
+  stdin_open: true
+  tty: true
+  privileged: true
+  volumes:
+    - ./lidar:/home/rosuser/ros_ws/src/lidar
+    - ./bags:/home/rosuser/bags
+    - ./data:/home/rosuser/data
+  environment:
+    - ROS_DOMAIN_ID=0
+
+services:
+  # Linux profile for direct sensor UDP ingest and optional RViz.
+  lidar-linux:
+    <<: *common
+    network_mode: host
+    environment:
+      - ROS_DOMAIN_ID=0
+      - DISPLAY=${DISPLAY:-:0}
+    volumes:
+      - ./lidar:/home/rosuser/ros_ws/src/lidar
+      - ./bags:/home/rosuser/bags
+      - ./data:/home/rosuser/data
+      - /tmp/.X11-unix:/tmp/.X11-unix
+    profiles: ["linux"]
+
+  # macOS profile for TCP relay ingest and Foxglove-based visualization.
+  lidar-mac:
+    <<: *common
+    platform: linux/amd64
+    ports:
+      - "12368:12368/tcp"
+      - "8765:8765/tcp"
+    profiles: ["mac"]

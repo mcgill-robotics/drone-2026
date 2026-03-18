@@ -1,0 +1,19 @@
+# OctoMap server settings.
+# The node consumes /velodyne_points plus TF and builds a 3D occupancy grid.
+
+octomap_server_node:
+  ros__parameters:
+    resolution: 0.1
+    frame_id: map
+    base_frame_id: base_link
+    sensor_model/max_range: 50.0
+    sensor_model/hit: 0.7
+    sensor_model/miss: 0.4
+    sensor_model/min: 0.12
+    sensor_model/max: 0.97
+    latch: false
+    filter_ground: true
+    ground_filter/distance: 0.1
+    ground_filter/plane_distance: 0.1
+    pointcloud_min_z: -2.0
+    pointcloud_max_z: 50.0

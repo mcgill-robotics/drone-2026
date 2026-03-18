@@ -1,0 +1,18 @@
+# MAVROS connection settings for the flight controller.
+# Adjust fcu_url for the deployed transport:
+#   Serial:    /dev/ttyACM0:921600
+#   UDP:       udp://:14540@127.0.0.1:14557
+#   TCP:       tcp://127.0.0.1:5760
+
+mavros_node:
+  ros__parameters:
+    fcu_url: "/dev/ttyACM0:921600"
+    gcs_url: ""
+    target_system_id: 1
+    target_component_id: 1
+    fcu_protocol: "v2.0"
+
+    conn/timeout: 10.0
+    imu/frame_id: base_link
+    local_position/frame_id: odom
+    local_position/tf/send: false

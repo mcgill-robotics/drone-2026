@@ -1,0 +1,13 @@
+# Velodyne driver parameters for PCAP playback.
+velodyne_driver_node:
+  ros__parameters:
+    model: VLP16
+    pcap: /home/rosuser/data/2026-02-21-13-54-03_Velodyne-VLP-16-Data.pcap
+    read_once: false
+    read_fast: false
+    repeat_delay: 0.0
+    port: 2368
+    rpm: 600.0
+    gps_time: false
+    time_offset: 0.0
+    frame_id: velodyne
