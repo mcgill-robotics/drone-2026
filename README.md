@@ -30,6 +30,51 @@ The repository root contains the container runtime definition and the operator-f
 - macOS live LiDAR ingest also requires the Docker tunnel path: run the in-container `udp_relay.py` listener and forward host UDP `2368` into Docker over TCP `12368`.
 - `start.sh` handles that macOS tunnel automatically by launching the container relay and a host-side `socat` process.
 
+## Jetson ↔ Velodyne Ethernet Setup (current progress)
+
+At this stage, we are configuring a direct Ethernet connection between the Jetson and the Velodyne interface.
+
+A dedicated NetworkManager connection was created for the LiDAR interface:
+
+    sudo nmcli con add type ethernet con-name lidar-direct ifname enP8p1s0
+
+This successfully created a connection profile named `lidar-direct`.
+
+A second attempt was made including an IP inline:
+
+    sudo nmcli con add type ethernet con-name lidar-direct ifname enP8p1s0 ip4 192.168.1.100/24
+
+This produced a warning indicating that a connection with the same name already exists, but still created another profile instance.
+
+### Interface inspection
+
+After bringing up the connection, the interface state was checked with:
+
+    ip addr show
+
+Relevant output (abridged):
+
+    enP8p1s0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 ...
+        inet 192.168.1.100/24 scope global enP8p1s0
+
+### Interpretation
+
+- The interface `enP8p1s0` now has:
+  - a valid IPv4 address: `192.168.1.100/24`
+  - state `UP`
+  - flag `LOWER_UP` (physical link detected)
+
+- The key change from earlier attempts:
+  - previously: `NO-CARRIER` → no physical link
+  - now: `BROADCAST,...,LOWER_UP` → cable/link is active
+
+This indicates that:
+- the Ethernet interface is now correctly configured
+- the physical connection is detected
+- the Jetson is on the expected subnet for the Velodyne (`192.168.1.x`)
+
+At this point, the network layer is partially validated and ready for the next step.
+
 ## Files
 
 - [`Dockerfile`](/Users/malachi/code/drone/Dockerfile): ROS 2 image definition and package installation
