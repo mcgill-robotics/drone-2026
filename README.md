@@ -30,50 +30,65 @@ The repository root contains the container runtime definition and the operator-f
 - macOS live LiDAR ingest also requires the Docker tunnel path: run the in-container `udp_relay.py` listener and forward host UDP `2368` into Docker over TCP `12368`.
 - `start.sh` handles that macOS tunnel automatically by launching the container relay and a host-side `socat` process.
 
-## Jetson ↔ Velodyne Ethernet Setup (current progress)
+## Jetson ↔ Velodyne Ethernet Setup (Current Progress)
 
-At this stage, we are configuring a direct Ethernet connection between the Jetson and the Velodyne interface.
+The Jetson connects directly to the Velodyne via a dedicated Ethernet interface on the `192.168.137.0/24` subnet, with a Windows PC acting as the gateway and internet source.
 
-A dedicated NetworkManager connection was created for the LiDAR interface:
+### Network Layout
 
-    sudo nmcli con add type ethernet con-name lidar-direct ifname enP8p1s0
+| Device              | Interface  | IP Address        | Notes                        |
+|---------------------|------------|-------------------|------------------------------|
+| PC (Windows)        | Ethernet   | 192.168.137.1     | Internet sharing (gateway)   |
+| PC (Windows)        | WiFi       | 10.x.x.x          | Internet source              |
+| Jetson              | enP8p1s0   | 192.168.137.100   | Static IP                    |
+| LiDAR (VLP-16)      | Ethernet   | 192.168.137.10    | Static IP                    |
 
-This successfully created a connection profile named `lidar-direct`.
+### Jetson Configuration
 
-A second attempt was made including an IP inline:
+Create and configure the dedicated NetworkManager connection:
+```bash
+sudo nmcli con add type ethernet con-name lidar-direct ifname enP8p1s0
+sudo nmcli con modify lidar-direct ipv4.addresses 192.168.137.100/24
+sudo nmcli con modify lidar-direct ipv4.gateway 192.168.137.1
+sudo nmcli con modify lidar-direct ipv4.method manual
+sudo nmcli con modify lidar-direct ipv4.dns "8.8.8.8 1.1.1.1"
+sudo nmcli con modify lidar-direct ipv4.ignore-auto-dns yes
+nmcli con up lidar-direct
+```
 
-    sudo nmcli con add type ethernet con-name lidar-direct ifname enP8p1s0 ip4 192.168.1.100/24
+> DNS is set manually to keep `apt` and domain resolution working through the Windows gateway.
 
-This produced a warning indicating that a connection with the same name already exists, but still created another profile instance.
+### LiDAR Configuration (VLP-16)
 
-### Interface inspection
+Set the following via the sensor's web interface, then click **Set**, save, and power cycle:
 
-After bringing up the connection, the interface state was checked with:
+| Field           | Value             |
+|-----------------|-------------------|
+| Sensor IP       | 192.168.137.10    |
+| Subnet Mask     | 255.255.255.0     |
+| Gateway         | 192.168.137.1     |
+| Destination IP  | 192.168.137.100   |
+| Data Port       | 2368              |
 
-    ip addr show
+### Verification
 
-Relevant output (abridged):
+Check the interface: `ip addr show enP8p1s0`
 
-    enP8p1s0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 ...
-        inet 192.168.1.100/24 scope global enP8p1s0
+Expected output (abridged):
+```
+enP8p1s0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 ...
+    inet 192.168.137.100/24 scope global enP8p1s0
+```
 
-### Interpretation
+- `UP` + `LOWER_UP` — interface is configured and physical link is detected
+- `inet 192.168.137.100/24` — static IP is applied correctly
+- If you see `NO-CARRIER` instead, the cable isn't seated or the LiDAR isn't powered
 
-- The interface `enP8p1s0` now has:
-  - a valid IPv4 address: `192.168.1.100/24`
-  - state `UP`
-  - flag `LOWER_UP` (physical link detected)
+Connectivity checks:
+- Ping the LiDAR: `ping 192.168.137.10`
+- Ping the gateway: `ping 192.168.137.1`
+- Ping internet: `ping 8.8.8.8`
 
-- The key change from earlier attempts:
-  - previously: `NO-CARRIER` → no physical link
-  - now: `BROADCAST,...,LOWER_UP` → cable/link is active
-
-This indicates that:
-- the Ethernet interface is now correctly configured
-- the physical connection is detected
-- the Jetson is on the expected subnet for the Velodyne (`192.168.1.x`)
-
-At this point, the network layer is partially validated and ready for the next step.
 
 ## Files
 
