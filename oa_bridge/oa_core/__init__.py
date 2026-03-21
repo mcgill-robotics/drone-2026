@@ -1,0 +1,1 @@
+"""oa_core – 3-D obstacle avoidance engine (no pygame)."""
