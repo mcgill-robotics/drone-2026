@@ -56,7 +56,7 @@ def parse_lidar_packet(raw: str) -> list[Obstacle3D]:
 def parse_lidar_packet(raw: str) -> list[Obstacle3D]:
     data = json.loads(raw)
     obstacles = []
-    drone_z = data.get("drone_pos", {}).get("z", 1.0)
+    max_obstacles = 400
     
     for pt in data.get("points", []):
         x, y, z = pt["x"], pt["y"], pt["z"]
@@ -64,15 +64,27 @@ def parse_lidar_packet(raw: str) -> list[Obstacle3D]:
         # Filter 1: skip clearly invalid points
         if abs(x) > 50 or abs(y) > 50 or abs(z) > 50:
             continue
+
+        # Filter 1b: skip non-finite values
+        if not (math.isfinite(x) and math.isfinite(y) and math.isfinite(z)):
+            continue
         
         # Filter 2: skip ground returns
         # In local LiDAR frame, ground points have large negative z
-        if z < -0.5:
+        if z < -0.2:
+            continue
+
+        # Filter 2b: ignore very high/low outliers
+        if abs(z) > 2.5:
             continue
             
         # Filter 3: skip points that are too close (self-detection)
         dist = (x**2 + y**2 + z**2) ** 0.5
-        if dist < 0.5:
+        if dist < 1.0:
+            continue
+
+        # Filter 3b: mask drone body neighborhood
+        if abs(x) < 0.45 and abs(y) < 0.45:
             continue
             
         # Filter 4: skip points beyond useful range
@@ -80,6 +92,10 @@ def parse_lidar_packet(raw: str) -> list[Obstacle3D]:
             continue
             
         obstacles.append(Obstacle3D(x, y, z, charge=300.0, radius=0.2))
+
+        # Cap obstacle count to reduce frame-to-frame command jitter
+        if len(obstacles) >= max_obstacles:
+            break
     
     return obstacles, data
 

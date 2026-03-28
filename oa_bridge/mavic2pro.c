@@ -59,6 +59,27 @@
 #define SEND_BUF_SIZE  131072   /* 128 KB – fits ~4000 points */
 #define RECV_BUF_SIZE  256
 
+/* OA safety limits (tuned conservatively to avoid aggressive tilt flips) */
+#define OA_MAX_VXY         2.0    /* m/s command clamp from Python */
+#define OA_MAX_VZ          1.0    /* m/s */
+#define OA_MAX_YAW_RATE    1.2    /* rad/s */
+#define OA_MAX_ROLL_DIST   0.8    /* mixer disturbance units */
+#define OA_MAX_PITCH_DIST  0.8    /* mixer disturbance units */
+#define OA_MAX_YAW_DIST    0.9    /* mixer disturbance units */
+#define OA_MAX_TARGET_Z_RATE 0.5  /* m/s integrated altitude target change */
+#define OA_MAX_STEP_DIST   0.10   /* max disturbance change per control step */
+#define OA_MAX_STEP_YAW    0.08   /* max yaw disturbance change per control step */
+#define OA_TILT_CUTOFF_RAD 0.70   /* ~40 deg: disable OA while recovering */
+
+/* LiDAR sanitisation for OA stability */
+#define OA_LIDAR_MIN_RANGE   1.2f
+#define OA_LIDAR_MAX_RANGE   7.0f
+#define OA_LIDAR_MIN_Z      -0.20f
+#define OA_LIDAR_MAX_ABS_Z   2.5f
+#define OA_SELF_MASK_X       0.45f
+#define OA_SELF_MASK_Y       0.45f
+#define OA_MAX_POINTS_SEND   700
+
 /* ── fixed target (change or extend to a waypoint list) ──────────────── */
 #define TARGET_X  5.0
 #define TARGET_Y  0.0
@@ -157,6 +178,9 @@ static int serialise_lidar(
     char *buf, int buf_size)
 {
   int pos = 0;
+  int included = 0;
+  int stride = (total > OA_MAX_POINTS_SEND) ? (total / OA_MAX_POINTS_SEND) : 1;
+  if (stride < 1) stride = 1;
 
   /* Header */
   pos += snprintf(buf+pos, buf_size-pos,
@@ -164,20 +188,25 @@ static int serialise_lidar(
   if (pos >= buf_size) return -1;
 
   int first = 1;
-  for (int i = 0; i < total; i++) {
+  for (int i = 0; i < total; i += stride) {
     /* Skip invalid / infinite points */
     if (!isfinite(cloud[i].x) ||
     !isfinite(cloud[i].y) ||
     !isfinite(cloud[i].z)) continue;
 
-    /* Skip points that are likely ground returns (too close or below drone) */
+    /* Skip points that are likely ground/self/noise returns */
     float dist = sqrtf(cloud[i].x*cloud[i].x + 
                    cloud[i].y*cloud[i].y + 
                    cloud[i].z*cloud[i].z);
 
-    /* Skip ground returns and very close points */
-    if (dist < 1.0f) continue;   /* anything within 1m is likely ground */
-    if (dist > 8.0f) continue;   /* ignore very far points too */
+    if (dist < OA_LIDAR_MIN_RANGE) continue;
+    if (dist > OA_LIDAR_MAX_RANGE) continue;
+    if (cloud[i].z < OA_LIDAR_MIN_Z) continue;
+    if (fabsf(cloud[i].z) > OA_LIDAR_MAX_ABS_Z) continue;
+
+    /* Ignore points near the airframe center to reduce self-detections. */
+    if (fabsf(cloud[i].x) < OA_SELF_MASK_X && fabsf(cloud[i].y) < OA_SELF_MASK_Y)
+      continue;
 
     
     int written = snprintf(buf+pos, buf_size-pos,
@@ -189,6 +218,8 @@ static int serialise_lidar(
     if (pos + written >= buf_size) break;   /* truncate gracefully */
     pos  += written;
     first = 0;
+    included++;
+    if (included >= OA_MAX_POINTS_SEND) break;
   }
 
   pos += snprintf(buf+pos, buf_size-pos,
@@ -230,6 +261,7 @@ int main(int argc, char **argv) {
   WbDeviceTag camera_pitch = wb_robot_get_device("camera pitch");
 
   WbDeviceTag motors[4];
+  double motor_max_vel[4];
   motors[0] = wb_robot_get_device("front left propeller");
   motors[1] = wb_robot_get_device("front right propeller");
   motors[2] = wb_robot_get_device("rear left propeller");
@@ -237,6 +269,9 @@ int main(int argc, char **argv) {
   for (int m = 0; m < 4; m++) {
     wb_motor_set_position(motors[m], INFINITY);
     wb_motor_set_velocity(motors[m], 1.0);
+    motor_max_vel[m] = wb_motor_get_max_velocity(motors[m]);
+    if (motor_max_vel[m] < 1.0)
+      motor_max_vel[m] = 100.0;
   }
 
   /* ── wait for sensors to settle ──────────────────────────────────── */
@@ -262,6 +297,11 @@ int main(int argc, char **argv) {
   double oa_yaw   = 0.0;
   double oa_vz    = 0.0;   /* vertical velocity request */
 
+  /* Smoothed command states sent into the mixer */
+  double cmd_pitch = 0.0;
+  double cmd_roll  = 0.0;
+  double cmd_yaw   = 0.0;
+
   /* Buffers */
   static char send_buf[SEND_BUF_SIZE];
   static char recv_buf[RECV_BUF_SIZE];
@@ -275,6 +315,7 @@ int main(int argc, char **argv) {
     const double *rpy      = wb_inertial_unit_get_roll_pitch_yaw(imu);
     const double  roll     = rpy[0];
     const double  pitch    = rpy[1];
+    const double  yaw_ang  = rpy[2];
     const double  altitude = wb_gps_get_values(gps)[2];
     const double *gps_pos  = wb_gps_get_values(gps);
     const double  roll_vel = wb_gyro_get_values(gyro)[0];
@@ -312,22 +353,57 @@ int main(int argc, char **argv) {
            *
            * Scale factors are tuning knobs – start small.
            */
-          oa_pitch = -vx * 0.5;
-          oa_roll  =  vy * 0.5;
-          oa_yaw   =  yaw;
-          oa_vz    =  vz;            /* fed into altitude target below */
+          vx  = CLAMP(vx,  -OA_MAX_VXY,      OA_MAX_VXY);
+          vy  = CLAMP(vy,  -OA_MAX_VXY,      OA_MAX_VXY);
+          vz  = CLAMP(vz,  -OA_MAX_VZ,       OA_MAX_VZ);
+          yaw = CLAMP(yaw, -OA_MAX_YAW_RATE, OA_MAX_YAW_RATE);
+
+          /* Convert world-frame OA velocity request into body frame. */
+          const double cy = cos(yaw_ang);
+          const double sy = sin(yaw_ang);
+          const double vx_body = cy * vx + sy * vy;
+          const double vy_body = -sy * vx + cy * vy;
+
+          oa_pitch = CLAMP(-vx_body * 0.4, -OA_MAX_PITCH_DIST, OA_MAX_PITCH_DIST);
+          oa_roll  = CLAMP( vy_body * 0.4, -OA_MAX_ROLL_DIST,  OA_MAX_ROLL_DIST);
+          oa_yaw   = CLAMP(yaw * 0.7, -OA_MAX_YAW_DIST,   OA_MAX_YAW_DIST);
+          oa_vz    = CLAMP(vz, -OA_MAX_TARGET_Z_RATE, OA_MAX_TARGET_Z_RATE);
 
           /* Adjust altitude target from vertical velocity request */
           target_altitude += oa_vz * (timestep / 1000.0);
           target_altitude  = CLAMP(target_altitude, 0.3, 20.0);
+        } else {
+          /* Lost reply: clear OA command so the stabiliser can recover. */
+          oa_pitch = 0.0;
+          oa_roll  = 0.0;
+          oa_yaw   = 0.0;
+          oa_vz    = 0.0;
         }
+      } else {
+        /* Bridge send failed: drop OA influence and continue stabilized flight. */
+        oa_pitch = 0.0;
+        oa_roll  = 0.0;
+        oa_yaw   = 0.0;
+        oa_vz    = 0.0;
       }
     }
 
+    /* Emergency OA inhibit at high attitude: prioritize self-leveling. */
+    if (fabs(roll) > OA_TILT_CUTOFF_RAD || fabs(pitch) > OA_TILT_CUTOFF_RAD) {
+      oa_pitch = 0.0;
+      oa_roll  = 0.0;
+      oa_yaw   = 0.0;
+    }
+
+    /* Rate-limit OA commands to prevent sudden mixer shocks. */
+    cmd_pitch += CLAMP(oa_pitch - cmd_pitch, -OA_MAX_STEP_DIST, OA_MAX_STEP_DIST);
+    cmd_roll  += CLAMP(oa_roll  - cmd_roll,  -OA_MAX_STEP_DIST, OA_MAX_STEP_DIST);
+    cmd_yaw   += CLAMP(oa_yaw   - cmd_yaw,   -OA_MAX_STEP_YAW,  OA_MAX_STEP_YAW);
+
     /* ── 4. Keyboard override (manual testing) ───────────────────── */
-    double roll_disturbance  = oa_roll;
-    double pitch_disturbance = oa_pitch;
-    double yaw_disturbance   = oa_yaw;
+    double roll_disturbance  = cmd_roll;
+    double pitch_disturbance = cmd_pitch;
+    double yaw_disturbance   = cmd_yaw;
 
     int key = wb_keyboard_get_key();
     while (key > 0) {
@@ -370,8 +446,10 @@ int main(int argc, char **argv) {
        k_vertical_thrust + vert_input + roll_input - pitch_input - yaw_input
     };
 
-    for (int i = 0; i < 4; i++)
-      wb_motor_set_velocity(motors[i], m[i]);
+    for (int i = 0; i < 4; i++) {
+      const double cmd = CLAMP(m[i], -motor_max_vel[i], motor_max_vel[i]);
+      wb_motor_set_velocity(motors[i], cmd);
+    }
 
     /* Camera stabilisation */
     wb_motor_set_position(camera_roll,  -0.115 * roll_vel);

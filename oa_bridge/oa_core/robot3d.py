@@ -53,6 +53,8 @@ class Robot3D:
         self.env_history: list[str] = []
         self.yaw_rate             = 0.0       # rad/s, sent to Webots
         self.course_completed     = False
+        self.wall_stall_counter   = 0
+        self.last_target_distance = None
 
     # ── public API ──────────────────────────────────────────────────────
 
@@ -84,15 +86,43 @@ class Robot3D:
         # ── choose force ─────────────────────────────────────────────
         if obs_count > 0:
             self.steps_since_obstacle = 0
+
+            # If we stop making progress while near obstacles, switch wall side.
+            if target:
+                dist_to_target = self.pos.distance_to(target)
+                no_progress = (
+                    self.last_target_distance is not None
+                    and dist_to_target >= self.last_target_distance - 0.01
+                )
+                if no_progress and self.vel.length() < 0.2:
+                    self.wall_stall_counter += 1
+                else:
+                    self.wall_stall_counter = max(0, self.wall_stall_counter - 2)
+
+                if self.wall_stall_counter > 20:
+                    if self.wall_mode_direction == 0:
+                        self.wall_mode_direction = 1
+                    else:
+                        self.wall_mode_direction *= -1
+                    self.wall_stall_counter = 0
+
+                self.last_target_distance = dist_to_target
+
             new_force = self._calculate_adaptive_avoidance_force(
                 wall_normal, self.current_env_type, density
             )
         else:
             self.steps_since_obstacle += 1
+            self.wall_stall_counter = 0
             mem = self.avoid_cfg.memory_thresholds.get(self.current_env_type, 20)
             if self.steps_since_obstacle > mem:
                 self.wall_mode_direction = 0
             new_force = self._goal_force() if target else Vector3D(0, 0, 0)
+
+            if target:
+                self.last_target_distance = self.pos.distance_to(target)
+            else:
+                self.last_target_distance = None
 
         # ── stuck detection ──────────────────────────────────────────
         sc = self.stuck_cfg
@@ -300,6 +330,21 @@ class Robot3D:
                 self.wall_mode_direction = (
                     -1 if t_left.dot(to_tgt_xy) > t_right.dot(to_tgt_xy) else 1
                 )
+            elif self._target:
+                # Allow direction changes in dead-ends instead of committing forever.
+                t_left  = Vector3D(-wn_xy.y,  wn_xy.x, 0)
+                t_right = Vector3D( wn_xy.y, -wn_xy.x, 0)
+                diff = self._target - self.pos
+                to_tgt_xy = Vector3D(diff.x, diff.y, 0)
+                if to_tgt_xy.length() > 1e-6:
+                    to_tgt_xy.normalize_ip()
+                    left_score = t_left.dot(to_tgt_xy)
+                    right_score = t_right.dot(to_tgt_xy)
+                    switch_margin = 0.35
+                    if self.wall_mode_direction == -1 and right_score > left_score + switch_margin:
+                        self.wall_mode_direction = 1
+                    elif self.wall_mode_direction == 1 and left_score > right_score + switch_margin:
+                        self.wall_mode_direction = -1
 
             tangent = (
                 Vector3D(-wn_xy.y,  wn_xy.x, 0)
@@ -320,6 +365,19 @@ class Robot3D:
                 steer  = tangent * self.phys_cfg.max_speed - self.vel
                 force += steer * getattr(profile, "steering_gain", 1.0)
 
+            if self._target and tangent.length() > 1e-6:
+                # Keep making progress in obstacle mode without pushing into the wall.
+                goal_force = self._goal_force()
+                toward_wall_component = min(0.0, goal_force.dot(wall_normal))
+                goal_force = goal_force - wall_normal * toward_wall_component
+
+                tangent_goal_mag = max(0.0, goal_force.dot(tangent))
+                force += tangent * tangent_goal_mag * 0.8
+
+                # If nearly stopped near an obstacle, bias tangential flow to break deadlocks.
+                if self.vel.length() < 0.15:
+                    force += tangent * (t_mult * 0.4)
+
             # Z-axis: vertical repulsion to avoid floor/ceiling
             z_repulsion = wall_normal.z * (profile.normal_base * 0.5 + profile.normal_urgency_mult * urgency * 0.5)
             force.z += z_repulsion
@@ -327,6 +385,13 @@ class Robot3D:
             if env_type == "CORRIDOR" and hasattr(profile, "goal_force_strength") and self._target:
                 to_goal = (self._target - self.pos).normalize()
                 force  += to_goal * profile.goal_force_strength
+
+        # Guarantee some tangential flow so we move around walls instead of stalling.
+        if tangent.length() > 1e-6:
+            tangent_component = force.dot(tangent)
+            min_tangent_component = self.phys_cfg.max_force * (0.18 + 0.22 * urgency)
+            if tangent_component < min_tangent_component:
+                force += tangent * (min_tangent_component - tangent_component)
 
         return force
 
