@@ -36,3 +36,13 @@ The objective of this task is to extinguish small indoor and outdoor blazes whil
 - Altitude: Flights are limited to a maximum altitude of 400ft. 
 - Flight Crew: Limited to a maximum of five members on the flight line. 
 - Pilot Requirements: All pilots must hold an Advanced RPAS Pilot Certificate. 
+## comprehensive summary of repository structure
+- The repository is sorted into two important workspaces: the ardupilot software, and the python mission controller. The comp requires GPS, IMU data, camera stream, and LiDAR data. The LiDAR and camera is attached to the Orin nano jetson, while the GPS module and the IMU module is attached to the flight controller.
+
+- Ardupilot was our main choice of drone operating system due to its flexibility in writing commands. However, this flexibility is coupled with the task of a higher ceiling of integration.
+
+- the mission controller repository is where most if not all of our code is written to run the two missions. It functions as follows:
+
+- the controller.py file defines the state machine
+
+- MAVLink is a binary messaging protocol used for communications between the flight controller, the jetson, and the ground control station. Due to our environment setup, mavlink calls will be needed if we want our software to allow drone "actions". To test it out, we can use the built-in SITL (Software In The Loop) simulator provided in ardupilot repository.
