@@ -217,27 +217,88 @@ def build_pixel_bucket(uv: np.ndarray) -> Dict[Tuple[int, int], List[int]]:
     return bucket
 
 
-def find_nearest_projected_point(click_xy, uv, Pc, bucket, search_radius_px=15):
+def find_best_3d_point(click_xy, uv, Pc, calib, bucket,
+                      search_radius_px=10,
+                      max_search_radius_px=40,
+                      min_candidates=12,
+                      top_k=8):
+
     cx, cy = click_xy
-    best_i, best_d2, best_z = None, float("inf"), float("inf")
 
-    for du in range(-search_radius_px, search_radius_px + 1):
-        for dv in range(-search_radius_px, search_radius_px + 1):
-            key = (cx + du, cy + dv)
-            if key not in bucket:
-                continue
-            for i in bucket[key]:
-                dx = float(uv[i,0] - cx); dy = float(uv[i,1] - cy)
-                d2 = dx*dx + dy*dy
-                z = float(Pc[i,2])   # depth in camera frame
+    # --- Step 1: progressively gather candidates ---
+    candidates = []
+    radius = search_radius_px
 
-                # primary: pixel closeness, secondary: closer depth
-                if d2 < best_d2 - 1e-9 or (abs(d2 - best_d2) < 1e-9 and z < best_z):
-                    best_i, best_d2, best_z = i, d2, z
+    while radius <= max_search_radius_px:
+        for du in range(-radius, radius + 1):
+            for dv in range(-radius, radius + 1):
+                key = (cx + du, cy + dv)
+                if key not in bucket:
+                    continue
+                candidates.extend(bucket[key])
 
-    if best_i is None:
+        if len(candidates) >= min_candidates:
+            break
+
+        radius *= 2
+
+    if len(candidates) == 0:
         return None, None
-    return Pc[best_i].copy(), uv[best_i].copy()
+
+    idx = np.array(candidates, dtype=np.int32)
+    uv_c = uv[idx]
+    Pc_c = Pc[idx]
+
+    # --- Step 2: pixel distance ---
+    duv = uv_c - np.array([cx, cy])
+    pixel_d2 = np.sum(duv**2, axis=1)
+
+    # --- Step 3: camera ray ---
+    fx = calib.P[0, 0]
+    fy = calib.P[1, 1]
+    cx0 = calib.P[0, 2]
+    cy0 = calib.P[1, 2]
+
+    x = (cx - cx0) / fx
+    y = (cy - cy0) / fy
+
+    ray = np.array([x, y, 1.0])
+    ray /= np.linalg.norm(ray)
+
+    # --- Step 4: distance to ray ---
+    proj_len = Pc_c @ ray
+    closest = np.outer(proj_len, ray)
+    perp = Pc_c - closest
+    ray_dist = np.linalg.norm(perp, axis=1)
+
+    # --- Step 5: combined score ---
+    score = pixel_d2 + 10.0 * (ray_dist ** 2)
+
+    # --- Step 6: take best points ---
+    k = min(top_k, len(score))
+    best_idx = np.argsort(score)[:k]
+
+    Pc_best = Pc_c[best_idx]
+    uv_best = uv_c[best_idx]
+
+    # --- Step 7: reject depth outliers ---
+    depths = Pc_best[:, 2]
+    median_z = np.median(depths)
+    mask = np.abs(depths - median_z) < 1.0
+
+    if np.sum(mask) >= 3:
+        Pc_best = Pc_best[mask]
+        uv_best = uv_best[mask]
+
+    # --- Step 8: weighted average ---
+    weights = 1.0 / (score[best_idx] + 1e-6)
+    weights = weights[:len(Pc_best)]
+    weights /= np.sum(weights)
+
+    P_final = np.sum(Pc_best * weights[:, None], axis=0)
+    uv_final = np.sum(uv_best * weights[:, None], axis=0)
+
+    return P_final, uv_final
 
 
 # -----------------------------
@@ -360,10 +421,11 @@ def main():
     def on_mouse(event, x, y, flags, param):
         nonlocal clicked
         if event == cv2.EVENT_LBUTTONDOWN:
-            P, uvP = find_nearest_projected_point(
+            P, uvP = P, uvP = find_best_3d_point(
                 (x, y),
                 uv=uv,
                 Pc=Pc,
+                calib=calib,
                 bucket=bucket,
                 search_radius_px=args.search_radius,
             )
@@ -409,7 +471,7 @@ def main():
             overlay_on = not overlay_on
             base = img.copy()
             if overlay_on:
-                base = draw_lidar_overlay(base, uv, P3)
+                base = draw_lidar_overlay(base, uv, Pc)
             redraw()
 
     cv2.destroyAllWindows()
