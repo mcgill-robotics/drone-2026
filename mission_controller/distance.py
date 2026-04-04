@@ -36,9 +36,7 @@ import cv2
 import numpy as np
 
 
-# -----------------------------
 # Data structures
-# -----------------------------
 @dataclass
 class Calibration:
     P: np.ndarray      # 3x4 velo->img
@@ -47,9 +45,7 @@ class Calibration:
 
 
 
-# -----------------------------
 # KITTI calibration loading
-# -----------------------------
 def _read_kitti_calib_file(path: str) -> Dict[str, np.ndarray]:
     """
     Reads KITTI calibration text file into dict of numpy arrays (flat).
@@ -118,9 +114,7 @@ def load_kitti_raw_calibration(seq_dir: str, cam: int = 2) -> Calibration:
     return Calibration(P=P, Tr=Tr, R_rect4=R_rect4)
 
 
-# -----------------------------
 # LiDAR loading
-# -----------------------------
 def load_lidar_points(path: str) -> np.ndarray:
     """
     Supported:
@@ -149,9 +143,7 @@ def load_lidar_points(path: str) -> np.ndarray:
     return pts.astype(np.float64)
 
 
-# -----------------------------
 # Projection (KITTI)
-# -----------------------------
 def project_lidar_to_image(
     lidar_xyz: np.ndarray,
     calib: Calibration,
@@ -201,9 +193,7 @@ def project_lidar_to_image(
 
 
 
-# -----------------------------
 # Click lookup (fast)
-# -----------------------------
 def build_pixel_bucket(uv: np.ndarray) -> Dict[Tuple[int, int], List[int]]:
     """
     Buckets projected points by integer pixel coordinate for fast local search.
@@ -301,9 +291,7 @@ def find_best_3d_point(click_xy, uv, Pc, calib, bucket,
     return P_final, uv_final
 
 
-# -----------------------------
 # Drawing helpers
-# -----------------------------
 def draw_lidar_overlay(img: np.ndarray, uv: np.ndarray, P3: np.ndarray, max_points: int = 90000) -> np.ndarray:
     """
     Overlays projected LiDAR points on the image.
@@ -334,9 +322,7 @@ def draw_lidar_overlay(img: np.ndarray, uv: np.ndarray, P3: np.ndarray, max_poin
     return out
 
 
-# -----------------------------
 # Main UI
-# -----------------------------
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--seq", required=True,
