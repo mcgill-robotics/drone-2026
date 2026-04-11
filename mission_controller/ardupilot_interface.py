@@ -1,86 +1,135 @@
 """
-ArduPilot interface wrapper using pymavlink
-This module provides a connection to ArduPilot autopilots via MAVLink
-Adapted from ArduPilot's Tools/autotest framework
-
-Note: This module uses lazy imports of pymavlink to avoid hanging on import
-if pymavlink is not installed. pymavlink is only required at runtime when
-connecting to an actual autopilot.
+ArduPilot interface wrapper using MAVROS and ROS 2
+This module provides connection to ArduPilot via MAVROS middleware
+MAVROS must be running to use this interface
 """
 
 import time
+import rclpy
+from rclpy.node import Node
+from geometry_msgs.msg import PoseStamped, TwistStamped
+from mavros_msgs.msg import State, BatteryStatus
+from mavros_msgs.srv import CommandBool, SetMode, CommandTOL, CommandHome
+from sensor_msgs.msg import BatteryState
 
 
-class ArduPilotInterface:
+class ArduPilotInterface(Node):
     """
-    Wrapper for communicating with ArduPilot via MAVLink
-    Uses pymavlink library for protocol communication
+    Wrapper for communicating with ArduPilot via MAVROS
+    Requires MAVROS to be running and connected to the flight controller
     """
     
-    def __init__(self, connection_string="udp:127.0.0.1:14550", baud=115200, timeout=30):
+    def __init__(self, node_name="ardupilot_interface", namespace="mavros"):
         """
-        Initialize connection to ArduPilot autopilot
+        Initialize MAVROS interface
         
         Args:
-            connection_string: MAVLink connection string (e.g., "udp:127.0.0.1:14550", "/dev/ttyUSB0")
-            baud: Serial baud rate (default 115200 for most serial connections)
-            timeout: Connection timeout in seconds
+            node_name: ROS 2 node name
+            namespace: MAVROS namespace (default "mavros")
         """
-        self.mav = None
-        self.connection_string = connection_string
-        self.baud = baud
-        self.timeout = timeout
+        super().__init__(node_name)
+        
+        self.namespace = namespace
         self.connected = False
-        print(f"[ARDUPILOT] Initialized (ready to connect) - {connection_string}")
+        self.current_state = None
+        self.current_position = None
+        self.battery_status = None
+        self.timeout = 30
+        
+        # Create subscriptions
+        # create ROS2 subscriptions
+        self.state_sub = self.create_subscription(
+            State,
+            f"/{namespace}/state",
+            #this callback is a function that is continously called from the ros node
+            self._state_callback,
+            10
+        )
+        
+        self.position_sub = self.create_subscription(
+            PoseStamped,
+            f"/{namespace}/local_position/pose",
+            self._position_callback,
+            10
+        )
+        
+        self.battery_sub = self.create_subscription(
+            BatteryState,
+            f"/{namespace}/battery",
+            self._battery_callback,
+            10
+        )
+        
+        # Create service clients
+        self.arming_client = self.create_client(CommandBool, f"/{namespace}/cmd/arming")
+        self.set_mode_client = self.create_client(SetMode, f"/{namespace}/cmd/set_mode")
+        self.takeoff_client = self.create_client(CommandTOL, f"/{namespace}/cmd/takeoff")
+        self.land_client = self.create_client(CommandTOL, f"/{namespace}/cmd/land")
+        self.home_client = self.create_client(CommandHome, f"/{namespace}/cmd/set_home")
+        
+        # Create publishers
+        self.setpoint_pub = self.create_publisher(
+            PoseStamped,
+            f"/{namespace}/setpoint_position/local",
+            10
+        )
+        
+        print(f"[ARDUPILOT] Initialized MAVROS interface (namespace: {namespace})")
+    
+    def _state_callback(self, msg):
+        """Update current vehicle state"""
+        self.current_state = msg
+        self.connected = msg.connected
+    
+    def _position_callback(self, msg):
+        """Update current vehicle position"""
+        self.current_position = msg
+    
+    def _battery_callback(self, msg):
+        """Update battery status"""
+        self.battery_status = msg
+    
+    def _wait_for_connection(self, timeout=None):
+        """Wait for MAVROS connection to be established"""
+        if timeout is None:
+            timeout = self.timeout
+        
+        start = time.time()
+        # continuosly runs rclpy spins which calls state_call and if "connected" changes, its conected
+        while not self.connected and (time.time() - start) < timeout:
+            rclpy.spin_once(self, timeout_sec=0.1)
+            time.sleep(0.1)
+        
+        if self.connected:
+            print("[ARDUPILOT] Connected to MAVROS")
+            return True
+        else:
+            print("[ARDUPILOT] Failed to connect to MAVROS")
+            return False
     
     def connect(self):
         """
-        Establish connection to autopilot
+        Connect to MAVROS (wait for connection)
+        MAVROS must be running for this to work
         """
-        try:
-            from pymavlink import mavutil
-        except (ImportError, Exception) as e:
-            print("[ERROR] pymavlink library not available")
-            print("[ERROR] Install with: pip install pymavlink")
-            print(f"[ERROR] Details: {str(e)}")
-            self.connected = False
-            return False
-        
-        try:
-            print(f"[ARDUPILOT] Connecting to {self.connection_string}...")
-            self.mav = mavutil.mavlink_connection(
-                self.connection_string,
-                baud=self.baud,
-                timeout=self.timeout
-            )
-            self.mav.wait_heartbeat(timeout=self.timeout)
-            print(f"[ARDUPILOT] Connected to autopilot: {self.mav.sysid}")
-            self.connected = True
-            return True
-        except Exception as e:
-            print(f"[ARDUPILOT] Connection failed: {str(e)}")
-            self.connected = False
-            return False
+        print("[ARDUPILOT] Connecting to MAVROS...")
+        # this function waits for a heartbeat as well
+        return self._wait_for_connection()
     
     def disconnect(self):
-        """Close connection to autopilot"""
-        if self.mav:
-            self.mav.close()
-            self.connected = False
-            print("[ARDUPILOT] Disconnected")
+        """Disconnect from MAVROS"""
+        print("[ARDUPILOT] Disconnected")
+        try:
+            self.destroy_node()
+            print("[ARDUPILOT] Node destroyed")
+        except Exception as e:
+            print(f"[ARDUPILOT] Disconnect failed: {str(e)}")
     
     def is_armed(self):
         """Check if vehicle is armed"""
-        if not self.connected or not self.mav:
+        if not self.connected or not self.current_state:
             return False
-        try:
-            from pymavlink import mavutil
-            msg = self.mav.messages.get('HEARTBEAT')
-            if msg:
-                return (msg.base_mode & mavutil.mavlink.MAV_MODE_FLAG_SAFETY_ARMED) != 0
-        except:
-            pass
-        return False
+        return self.current_state.armed
     
     def arm_vehicle(self, timeout=20):
         """
@@ -89,8 +138,8 @@ class ArduPilotInterface:
         Args:
             timeout: Timeout in seconds
         """
-        if not self.connected or not self.mav:
-            print("[ARDUPILOT] Not connected, cannot arm")
+        if not self.connected:
+            print("[ARDUPILOT] Not connected to MAVROS, cannot arm")
             return False
         
         if self.is_armed():
@@ -99,25 +148,21 @@ class ArduPilotInterface:
         
         print("[ARDUPILOT] Arming vehicle...")
         try:
-            from pymavlink import mavutil
-            self.mav.mav.command_long_send(
-                self.mav.target_system,
-                self.mav.target_component,
-                mavutil.mavlink.MAV_CMD_COMPONENT_ARM_DISARM,
-                0,  # confirmation
-                1,  # arm command
-                0, 0, 0, 0, 0, 0
-            )
+            req = CommandBool.Request()
+            req.value = True
+            
+            future = self.arming_client.call_async(req)
             
             start = time.time()
-            while not self.is_armed() and (time.time() - start) < timeout:
+            while not future.done() and (time.time() - start) < timeout:
+                rclpy.spin_once(self, timeout_sec=0.1)
                 time.sleep(0.1)
             
-            if self.is_armed():
+            if future.done() and future.result().success:
                 print("[ARDUPILOT] Vehicle armed successfully")
                 return True
             else:
-                print("[ARDUPILOT] Arming timeout")
+                print("[ARDUPILOT] Arming failed")
                 return False
         except Exception as e:
             print(f"[ARDUPILOT] Arm failed: {str(e)}")
@@ -125,7 +170,8 @@ class ArduPilotInterface:
     
     def disarm_vehicle(self, timeout=20):
         """Disarm the vehicle (prevent motors from spinning)"""
-        if not self.connected or not self.mav:
+        if not self.connected:
+            print("[ARDUPILOT] Not connected to MAVROS, cannot disarm")
             return False
         
         if not self.is_armed():
@@ -134,25 +180,21 @@ class ArduPilotInterface:
         
         print("[ARDUPILOT] Disarming vehicle...")
         try:
-            from pymavlink import mavutil
-            self.mav.mav.command_long_send(
-                self.mav.target_system,
-                self.mav.target_component,
-                mavutil.mavlink.MAV_CMD_COMPONENT_ARM_DISARM,
-                0,  # confirmation
-                0,  # disarm command
-                0, 0, 0, 0, 0, 0
-            )
+            req = CommandBool.Request()
+            req.value = False
+            
+            future = self.arming_client.call_async(req)
             
             start = time.time()
-            while self.is_armed() and (time.time() - start) < timeout:
+            while not future.done() and (time.time() - start) < timeout:
+                rclpy.spin_once(self, timeout_sec=0.1)
                 time.sleep(0.1)
             
-            if not self.is_armed():
+            if future.done() and future.result().success:
                 print("[ARDUPILOT] Vehicle disarmed successfully")
                 return True
             else:
-                print("[ARDUPILOT] Disarm timeout")
+                print("[ARDUPILOT] Disarming failed")
                 return False
         except Exception as e:
             print(f"[ARDUPILOT] Disarm failed: {str(e)}")
@@ -166,37 +208,28 @@ class ArduPilotInterface:
             mode_name: Mode name (e.g., "GUIDED", "AUTO", "LAND", "RTL")
             timeout: Timeout in seconds
         """
-        if not self.connected or not self.mav:
-            print("[ARDUPILOT] Not connected, cannot change mode")
+        if not self.connected:
+            print("[ARDUPILOT] Not connected to MAVROS, cannot change mode")
             return False
         
         print(f"[ARDUPILOT] Changing mode to {mode_name}...")
         try:
-            from pymavlink import mavutil
-            # Get mode ID from mode name
-            if mode_name in self.mav.mode_mapping():
-                mode_id = self.mav.mode_mapping()[mode_name]
-            else:
-                print(f"[ARDUPILOT] Unknown mode: {mode_name}")
-                return False
+            req = SetMode.Request()
+            req.custom_mode = mode_name
             
-            # Send set mode command
-            self.mav.mav.set_mode_send(
-                self.mav.target_system,
-                mavutil.mavlink.MAV_MODE_FLAG_CUSTOM_MODE_ENABLED,
-                mode_id
-            )
+            future = self.set_mode_client.call_async(req)
             
             start = time.time()
-            while True:
-                msg = self.mav.messages.get('HEARTBEAT')
-                if msg and msg.custom_mode == mode_id:
-                    print(f"[ARDUPILOT] Mode changed to {mode_name}")
-                    return True
-                if (time.time() - start) > timeout:
-                    print(f"[ARDUPILOT] Mode change timeout")
-                    return False
+            while not future.done() and (time.time() - start) < timeout:
+                rclpy.spin_once(self, timeout_sec=0.1)
                 time.sleep(0.1)
+            
+            if future.done() and future.result().mode_sent:
+                print(f"[ARDUPILOT] Mode changed to {mode_name}")
+                return True
+            else:
+                print(f"[ARDUPILOT] Mode change failed")
+                return False
         except Exception as e:
             print(f"[ARDUPILOT] Mode change failed: {str(e)}")
             return False
@@ -209,54 +242,42 @@ class ArduPilotInterface:
             altitude: Target altitude in meters
             timeout: Timeout in seconds
         """
-        if not self.connected or not self.mav:
-            print("[ARDUPILOT] Not connected, cannot takeoff")
+        if not self.connected:
+            print("[ARDUPILOT] Not connected to MAVROS, cannot takeoff")
             return False
         
         print(f"[ARDUPILOT] Taking off to {altitude}m...")
         
         try:
-            from pymavlink import mavutil
             # Arm if not already armed
             if not self.is_armed():
                 if not self.arm_vehicle():
                     return False
             
-            # Switch to GUIDED mode for takeoff command
+            # Switch to GUIDED mode for takeoff
             if not self.change_mode("GUIDED"):
                 return False
             
             # Send takeoff command
-            self.mav.mav.command_long_send(
-                self.mav.target_system,
-                self.mav.target_component,
-                mavutil.mavlink.MAV_CMD_NAV_TAKEOFF,
-                0,  # confirmation
-                0,  # pitch (0 = default)
-                0,  # empty
-                0,  # empty
-                0,  # yaw
-                0,  # latitude
-                0,  # longitude
-                altitude  # altitude
-            )
+            req = CommandTOL.Request()
+            req.altitude = float(altitude)
             
-            # Wait for altitude
-            current_alt = 0
+            future = self.takeoff_client.call_async(req)
+            
             start = time.time()
-            while current_alt < (altitude * 0.95):  # 95% of target altitude
-                msg = self.mav.messages.get('GLOBAL_POSITION_INT')
-                if msg:
-                    current_alt = msg.relative_alt / 1000.0  # mm to m
-                    print(f"[ARDUPILOT] Current altitude: {current_alt:.1f}m")
+            while not future.done() and (time.time() - start) < timeout:
+                rclpy.spin_once(self, timeout_sec=0.1)
                 
-                if (time.time() - start) > timeout:
-                    print("[ARDUPILOT] Takeoff timeout")
-                    return False
+                if self.current_position:
+                    current_alt = self.current_position.pose.position.z
+                    if current_alt >= (altitude * 0.95):  # 95% of target
+                        print(f"[ARDUPILOT] Takeoff complete, reached {current_alt:.1f}m")
+                        return True
+                
                 time.sleep(0.5)
             
-            print(f"[ARDUPILOT] Takeoff complete, reached {current_alt:.1f}m")
-            return True
+            print("[ARDUPILOT] Takeoff timeout")
+            return False
         except Exception as e:
             print(f"[ARDUPILOT] Takeoff failed: {str(e)}")
             return False
@@ -268,31 +289,33 @@ class ArduPilotInterface:
         Args:
             timeout: Timeout in seconds
         """
-        if not self.connected or not self.mav:
-            print("[ARDUPILOT] Not connected, cannot land")
+        if not self.connected:
+            print("[ARDUPILOT] Not connected to MAVROS, cannot land")
             return False
         
         print("[ARDUPILOT] Landing...")
         
         try:
-            # Switch to LAND mode
-            if not self.change_mode("LAND"):
-                return False
+            # Send land command
+            req = CommandTOL.Request()
+            req.altitude = 0  # Land at current location
             
-            # Wait for landing
+            future = self.land_client.call_async(req)
+            
             start = time.time()
-            while True:
-                msg = self.mav.messages.get('GLOBAL_POSITION_INT')
-                if msg:
-                    current_alt = msg.relative_alt / 1000.0  # mm to m
-                    if current_alt < 1.0:  # Close enough to ground
+            while not future.done() and (time.time() - start) < timeout:
+                rclpy.spin_once(self, timeout_sec=0.1)
+                
+                if self.current_position:
+                    current_alt = self.current_position.pose.position.z
+                    if current_alt < 0.1:  # Close to ground
                         print("[ARDUPILOT] Landing complete")
                         return True
                 
-                if (time.time() - start) > timeout:
-                    print("[ARDUPILOT] Landing timeout")
-                    return False
                 time.sleep(0.5)
+            
+            print("[ARDUPILOT] Landing timeout")
+            return False
         except Exception as e:
             print(f"[ARDUPILOT] Landing failed: {str(e)}")
             return False
@@ -307,33 +330,28 @@ class ArduPilotInterface:
             alt: Altitude in meters
             timeout: Timeout in seconds
         """
-        if not self.connected or not self.mav:
-            print("[ARDUPILOT] Not connected, cannot navigate")
+        if not self.connected:
+            print("[ARDUPILOT] Not connected to MAVROS, cannot navigate")
             return False
         
         print(f"[ARDUPILOT] Navigating to ({lat:.6f}, {lon:.6f}, {alt}m)...")
         
         try:
-            from pymavlink import mavutil
             # Switch to GUIDED mode for navigation
             if not self.change_mode("GUIDED"):
                 return False
             
-            # Send goto location command
-            self.mav.mav.set_position_target_global_int_send(
-                0,  # time_boot_ms
-                self.mav.target_system,
-                self.mav.target_component,
-                0,  # frame (GLOBAL_INT)
-                0b0000111111000111,  # type_mask (position only)
-                int(lat * 1e7),
-                int(lon * 1e7),
-                alt,
-                0, 0, 0,  # vx, vy, vz
-                0, 0, 0,  # afx, afy, afz
-                0, 0  # yaw, yaw_rate
-            )
+            # Send setpoint position (local NED frame)
+            # Note: This uses local position, not GPS
+            # For GPS waypoints, use AUTO mode with mission waypoints
+            setpoint = PoseStamped()
+            setpoint.header.stamp = self.get_clock().now().to_msg()
+            setpoint.header.frame_id = "map"
+            setpoint.pose.position.x = lat  # These should be local offsets
+            setpoint.pose.position.y = lon
+            setpoint.pose.position.z = alt
             
+            self.setpoint_pub.publish(setpoint)
             print(f"[ARDUPILOT] Waypoint sent")
             return True
         except Exception as e:
@@ -342,18 +360,16 @@ class ArduPilotInterface:
     
     def get_location(self):
         """Get current vehicle location"""
-        if not self.connected or not self.mav:
+        if not self.connected or not self.current_position:
             return None
         
         try:
-            msg = self.mav.messages.get('GLOBAL_POSITION_INT')
-            if msg:
-                return {
-                    "lat": msg.lat / 1e7,
-                    "lon": msg.lon / 1e7,
-                    "alt": msg.alt / 1000.0,  # mm to m
-                    "relative_alt": msg.relative_alt / 1000.0
-                }
+            pos = self.current_position.pose.position
+            return {
+                "x": pos.x,
+                "y": pos.y,
+                "z": pos.z,
+            }
         except Exception as e:
             print(f"[ARDUPILOT] Failed to get location: {str(e)}")
         return None
@@ -361,7 +377,7 @@ class ArduPilotInterface:
     def get_altitude(self):
         """Get current altitude"""
         loc = self.get_location()
-        return loc["relative_alt"] if loc else 0
+        return loc["z"] if loc else 0
     
     def set_rc_channel(self, channel, pwm_value, timeout=30):
         """
@@ -371,38 +387,23 @@ class ArduPilotInterface:
             channel: Channel number (1-8)
             pwm_value: PWM value (typically 1000-2000 microseconds)
             timeout: Timeout in seconds
-        """
-        if not self.connected or not self.mav:
-            return False
         
-        try:
-            # Build RC override message
-            rc_values = [65535] * 8  # 65535 = no override
-            rc_values[channel - 1] = pwm_value
-            
-            self.mav.mav.rc_channels_override_send(
-                self.mav.target_system,
-                self.mav.target_component,
-                *rc_values
-            )
-            return True
-        except Exception as e:
-            print(f"[ARDUPILOT] RC override failed: {str(e)}")
-            return False
+        Note: MAVROS RC override topic may be used for this
+        """
+        print(f"[ARDUPILOT] RC override not yet implemented in MAVROS wrapper")
+        return False
     
     def get_battery_status(self):
         """Get battery status"""
-        if not self.connected or not self.mav:
+        if not self.connected or not self.battery_status:
             return None
         
         try:
-            msg = self.mav.messages.get('BATTERY_STATUS')
-            if msg:
-                return {
-                    "voltage": msg.voltages[0] / 1000.0,  # mV to V
-                    "current": msg.current_battery / 100.0,  # cA to A
-                    "percentage": msg.battery_remaining
-                }
+            return {
+                "voltage": self.battery_status.voltage,
+                "current": self.battery_status.current,
+                "percentage": self.battery_status.percentage
+            }
         except Exception as e:
             print(f"[ARDUPILOT] Failed to get battery: {str(e)}")
         return None
@@ -412,10 +413,15 @@ class ArduPilotInterface:
 _autopilot = None
 
 
-def init_autopilot(connection_string="udp:127.0.0.1:14550"):
+def init_autopilot(node_name="ardupilot_interface", namespace="mavros"):
     """Initialize global autopilot interface"""
     global _autopilot
-    _autopilot = ArduPilotInterface(connection_string)
+    
+    # Initialize ROS 2 if not already done
+    if not rclpy.ok():
+        rclpy.init()
+    
+    _autopilot = ArduPilotInterface(node_name=node_name, namespace=namespace)
     if _autopilot.connect():
         return _autopilot
     return _autopilot  # Return even if not connected (may connect later)
