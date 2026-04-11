@@ -1,6 +1,6 @@
 
 import rclpy
-from mission_controller.ardupilot_interface import init_autopilot
+from ardupilot_interface import init_autopilot
 
 def main():
     print("[MAIN] Starting ArduPilot interface...")

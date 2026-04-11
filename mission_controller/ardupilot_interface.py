@@ -8,7 +8,7 @@ import time
 import rclpy
 from rclpy.node import Node
 from geometry_msgs.msg import PoseStamped, TwistStamped
-from mavros_msgs.msg import State, BatteryStatus
+from mavros_msgs.msg import State
 from mavros_msgs.srv import CommandBool, SetMode, CommandTOL, CommandHome
 from sensor_msgs.msg import BatteryState
 
@@ -95,16 +95,19 @@ class ArduPilotInterface(Node):
             timeout = self.timeout
         
         start = time.time()
-        # continuosly runs rclpy spins which calls state_call and if "connected" changes, its conected
-        while not self.connected and (time.time() - start) < timeout:
+        # Check if we're receiving state messages instead of relying on connected flag
+        # This is more robust for PX4 which may report connected: false
+        while self.current_state is None and (time.time() - start) < timeout:
             rclpy.spin_once(self, timeout_sec=0.1)
             time.sleep(0.1)
         
-        if self.connected:
-            print("[ARDUPILOT] Connected to MAVROS")
+        if self.current_state is not None:
+            print("[ARDUPILOT] Connected to MAVROS (receiving state messages)")
+            self.connected = True
             return True
         else:
             print("[ARDUPILOT] Failed to connect to MAVROS")
+            self.connected = False
             return False
     
     def connect(self):
