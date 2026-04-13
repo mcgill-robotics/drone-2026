@@ -36,6 +36,9 @@ class PX4Interface(Node):
         self.current_position = None
         self.battery_status = None
         self.timeout = 30
+        self.current_gps = None
+        self.current_attitude = None
+        self.extended_state = None
         
         # create ROS2 subscriptions
         self.state_sub = self.create_subscription(
