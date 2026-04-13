@@ -7,6 +7,7 @@ MAVROS must be running to use this interface
 import time
 import rclpy
 from rclpy.node import Node
+from rclpy.qos import qos_profile_sensor_data
 from geometry_msgs.msg import PoseStamped, TwistStamped,  QuaternionStamped
 from mavros_msgs.msg import State, ExtendedState, HomePosition
 from mavros_msgs.srv import CommandBool, SetMode, CommandTOL, CommandHome, ParamSet
@@ -41,6 +42,13 @@ class PX4Interface(Node):
         self.extended_state = None
         self.home_position = None
         self.current_velocity = None
+        self._seen_position = False
+        self._seen_battery = False
+        self._seen_gps = False
+        self._seen_attitude = False
+        self._seen_extended_state = False
+        self._seen_home_position = False
+        self._seen_velocity = False
     
         
         # create ROS2 subscriptions
@@ -56,49 +64,49 @@ class PX4Interface(Node):
             PoseStamped,
             f"/{namespace}/local_position/pose",
             self._position_callback,
-            10
+            qos_profile_sensor_data
         )
         
         self.battery_sub = self.create_subscription(
             BatteryState,
             f"/{namespace}/battery",
             self._battery_callback,
-            10
+            qos_profile_sensor_data
         )
 
         self.global_position_sub = self.create_subscription(
             NavSatFix,
             f"/{namespace}/global_position/global",
             self._global_position_callback,
-            10
+            qos_profile_sensor_data
         )
 
         self.attitude_sub = self.create_subscription(
             QuaternionStamped,  # or use Imu from sensor_msgs
             f"/{namespace}/imu/data",
             self._attitude_callback,
-            10
+            qos_profile_sensor_data
         )
         
         self.extended_state_sub = self.create_subscription(
             ExtendedState,  # from mavros_msgs
             f"/{namespace}/extended_state",
             self._extended_state_callback,
-            10
+            qos_profile_sensor_data
         )
 
         self.home_position_sub = self.create_subscription(
             HomePosition,  # from mavros_msgs
             f"/{namespace}/home_position/home",
             self._home_position_callback,
-            10
+            qos_profile_sensor_data
         )
 
         self.velocity_sub = self.create_subscription(
             TwistStamped,  # Already imported in your code!
             f"/{namespace}/local_position/velocity_local",
             self._velocity_callback,
-            10
+            qos_profile_sensor_data
         )
 
         # Create service clients. clients are two way communication, messages are one way.
@@ -127,30 +135,53 @@ class PX4Interface(Node):
     def _position_callback(self, msg):
         """Update current vehicle position"""
         self.current_position = msg
+        if not self._seen_position:
+            pos = msg.pose.position
+            print(f"[PX4] Receiving local pose: x={pos.x:.2f}, y={pos.y:.2f}, z={pos.z:.2f}")
+            self._seen_position = True
     
     def _battery_callback(self, msg):
         """Update battery status"""
         self.battery_status = msg
+        if not self._seen_battery:
+            print(f"[PX4] Receiving battery status: {msg.percentage:.2f}")
+            self._seen_battery = True
     
     def _global_position_callback(self, msg):
         """Update GPS position"""
         self.current_gps = msg
+        if not self._seen_gps:
+            print(f"[PX4] Receiving GPS position: lat={msg.latitude:.6f}, lon={msg.longitude:.6f}, alt={msg.altitude:.2f}")
+            self._seen_gps = True
 
     def _attitude_callback(self, msg):
         """Update attitude/orientation"""
         self.current_attitude = msg
+        if not self._seen_attitude:
+            print("[PX4] Receiving attitude data")
+            self._seen_attitude = True
 
     def _extended_state_callback(self, msg):
         """Update extended state"""
         self.extended_state = msg
+        if not self._seen_extended_state:
+            print(f"[PX4] Receiving extended state: landed_state={msg.landed_state}")
+            self._seen_extended_state = True
 
     def _home_position_callback(self, msg):
         """Update home position"""
         self.home_position = msg
+        if not self._seen_home_position:
+            print(f"[PX4] Receiving home position: lat={msg.geo.latitude:.6f}, lon={msg.geo.longitude:.6f}, alt={msg.geo.altitude:.2f}")
+            self._seen_home_position = True
 
     def _velocity_callback(self, msg):
         """Update velocity"""
         self.current_velocity = msg
+        if not self._seen_velocity:
+            vel = msg.twist.linear
+            print(f"[PX4] Receiving local velocity: x={vel.x:.2f}, y={vel.y:.2f}, z={vel.z:.2f}")
+            self._seen_velocity = True
 
     def _wait_for_connection(self, timeout=None):
         """Wait for MAVROS connection to be established"""
