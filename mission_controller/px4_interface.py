@@ -467,61 +467,61 @@ class PX4Interface(Node):
             print(f"[PX4] Failed to get battery: {str(e)}")
         return None
 
-def get_gps_location(self):
-    """Get GPS latitude, longitude, altitude"""
-    if not self.current_gps:
-        return None
-    return {
-        "latitude": self.current_gps.latitude,
-        "longitude": self.current_gps.longitude,
-        "altitude": self.current_gps.altitude
-    }
+    def get_gps_location(self):
+        """Get GPS latitude, longitude, altitude"""
+        if not self.current_gps:
+            return None
+        return {
+            "latitude": self.current_gps.latitude,
+            "longitude": self.current_gps.longitude,
+            "altitude": self.current_gps.altitude
+        }
 
-def get_velocity(self):
-    """Get current velocity (x, y, z in m/s)"""
-    if not self.current_velocity:
-        return None
-    return {
-        "x": self.current_velocity.twist.linear.x,
-        "y": self.current_velocity.twist.linear.y,
-        "z": self.current_velocity.twist.linear.z
-    }
+    def get_velocity(self):
+        """Get current velocity (x, y, z in m/s)"""
+        if not self.current_velocity:
+            return None
+        return {
+            "x": self.current_velocity.twist.linear.x,
+            "y": self.current_velocity.twist.linear.y,
+            "z": self.current_velocity.twist.linear.z
+        }
 
-def is_landed(self):
-    """Check if vehicle is landed"""
-    if not self.extended_state:
-        return False
-    return self.extended_state.landed_state == 1  # 1 = landed
+    def is_landed(self):
+        """Check if vehicle is landed"""
+        if not self.extended_state:
+            return False
+        return self.extended_state.landed_state == 1  # 1 = landed
 
-def get_home_location(self):
-    """Get home position"""
-    if not self.home_position:
-        return None
-    return {
-        "latitude": self.home_position.geo.latitude,
-        "longitude": self.home_position.geo.longitude,
-        "altitude": self.home_position.geo.altitude
-    }
+    def get_home_location(self):
+        """Get home position"""
+        if not self.home_position:
+            return None
+        return {
+            "latitude": self.home_position.geo.latitude,
+            "longitude": self.home_position.geo.longitude,
+            "altitude": self.home_position.geo.altitude
+        }
 
-# Global instance
-_autopilot = None
+    # Global instance
+    _autopilot = None
 
 
-def init_px4(node_name="px4_interface", namespace="mavros"):
-    """Initialize global PX4 interface"""
-    global _autopilot
-    
-    # Initialize ROS 2 if not already done
-    if not rclpy.ok():
-        rclpy.init()
-    
-    _autopilot = PX4Interface(node_name=node_name, namespace=namespace)
-    if _autopilot.connect():
+    def init_px4(node_name="px4_interface", namespace="mavros"):
+        """Initialize global PX4 interface"""
+        global _autopilot
+        
+        # Initialize ROS 2 if not already done
+        if not rclpy.ok():
+            rclpy.init()
+        
+        _autopilot = PX4Interface(node_name=node_name, namespace=namespace)
+        if _autopilot.connect():
+            return _autopilot
+        return _autopilot  # Return even if not connected (may connect later)
+
+
+    def get_px4():
+        """Get global PX4 interface"""
+        global _autopilot
         return _autopilot
-    return _autopilot  # Return even if not connected (may connect later)
-
-
-def get_px4():
-    """Get global PX4 interface"""
-    global _autopilot
-    return _autopilot
