@@ -507,21 +507,21 @@ class PX4Interface(Node):
     _autopilot = None
 
 
-    def init_px4(node_name="px4_interface", namespace="mavros"):
-        """Initialize global PX4 interface"""
-        global _autopilot
-        
-        # Initialize ROS 2 if not already done
-        if not rclpy.ok():
-            rclpy.init()
-        
-        _autopilot = PX4Interface(node_name=node_name, namespace=namespace)
-        if _autopilot.connect():
-            return _autopilot
-        return _autopilot  # Return even if not connected (may connect later)
-
-
-    def get_px4():
-        """Get global PX4 interface"""
-        global _autopilot
+def init_px4(node_name="px4_interface", namespace="mavros"):
+    """Initialize global PX4 interface"""
+    global _autopilot
+    
+    # Initialize ROS 2 if not already done
+    if not rclpy.ok():
+        rclpy.init()
+    
+    _autopilot = PX4Interface(node_name=node_name, namespace=namespace)
+    if _autopilot.connect():
         return _autopilot
+    return _autopilot  # Return even if not connected (may connect later)
+
+
+def get_px4():
+    """Get global PX4 interface"""
+    global _autopilot
+    return _autopilot
