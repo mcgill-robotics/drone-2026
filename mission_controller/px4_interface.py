@@ -39,6 +39,9 @@ class PX4Interface(Node):
         self.current_gps = None
         self.current_attitude = None
         self.extended_state = None
+        self.home_position = None
+        self.current_velocity = None
+    
         
         # create ROS2 subscriptions
         self.state_sub = self.create_subscription(
