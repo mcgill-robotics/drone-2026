@@ -550,31 +550,35 @@ class PX4Interface(Node):
 _px4_process = None
 
 
-def boot_px4(fcu_url="serial:///dev/ttyUSB0:921600", namespace="mavros"):
+def boot_px4(fcu_url="udp://127.0.0.1:14540", namespace="mavros", wait_time=30):
     """
-    Boot PX4 via ros2 launch
+    Boot PX4 via ros2 launch in a background thread
     
     Args:
-        fcu_url: Flight Control Unit URL (e.g., "udp://127.0.0.1:14540")
-                - For SITL: "udp://127.0.0.1:14540"
+        fcu_url: Flight Control Unit URL
+                - For SITL simulation: "udp://127.0.0.1:14540" (default)
                 - For hardware: "serial:///dev/ttyUSB0:921600" or similar
         namespace: MAVROS namespace (default "mavros")
     
     Returns:
-        subprocess.Popen object if successful, None if failed
+        subprocess.Popen object if process started, None if failed
         
     Example:
-        px4_proc = boot_px4("udp://127.0.0.1:14540")
+        # For SITL simulation
+        px4_proc = boot_px4()
+        
+        # For hardware connection
+        px4_proc = boot_px4("serial:///dev/ttyUSB0:921600")
+        
+        # Then initialize the interface
         if px4_proc:
-            print("PX4 booting...")
-            time.sleep(5)  # Wait for PX4 to initialize
-            interface = init_px4()
+            px4 = init_px4(namespace="mavros")
     """
     global _px4_process
     
     # Check if PX4 is already running
     if _px4_process is not None and _px4_process.poll() is None:
-        print("[PX4] PX4 is already running (PID: {})".format(_px4_process.pid))
+        print(f"[PX4] PX4 is already running (PID: {_px4_process.pid})")
         return _px4_process
     
     print(f"[PX4] Booting PX4 with FCU URL: {fcu_url}")
@@ -586,19 +590,56 @@ def boot_px4(fcu_url="serial:///dev/ttyUSB0:921600", namespace="mavros"):
             f"fcu_url:={fcu_url}"
         ]
         
-        # Start the process
-        _px4_process = subprocess.Popen( #this is the same as running a subprocess
+        # Debug: Show the exact command being run
+        cmd_str = " ".join(cmd)
+        print(f"[PX4] Running command: {cmd_str}")
+        
+        # Start the process - use unbuffered output
+        _px4_process = subprocess.Popen(
             cmd,
             stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True
+            stderr=subprocess.STDOUT,  # Combine stderr with stdout
+            text=True,
+            bufsize=1,  # Line buffered
+            universal_newlines=True
         )
         
         print(f"[PX4] PX4 booting process started (PID: {_px4_process.pid})")
-        print("[PX4] Waiting for PX4 to initialize...")
+        print(f"[PX4] Waiting {wait_time} seconds for PX4/MAVROS to initialize...")
         
+        # Monitor output in a background thread to catch errors
+        def monitor_output():
+            try:
+                for line in iter(_px4_process.stdout.readline, ''):
+                    if line.strip():
+                        print(f"[PX4 OUTPUT] {line.strip()}")
+                    if "Connected to" in line or "MAVROS" in line:
+                        print("[PX4] MAVROS connection detected")
+            except:
+                pass
+        
+        output_thread = threading.Thread(target=monitor_output, daemon=True)
+        output_thread.start()
+        
+        # Wait for PX4 to boot
+        time.sleep(wait_time)
+        
+        # Check if process crashed
+        if _px4_process.poll() is not None:
+            print(f"[PX4] ERROR: Process exited with code {_px4_process.poll()}")
+            print("[PX4] This usually means:")
+            print("  - ros2 command not found (not in PATH)")
+            print("  - mavros package not installed")
+            print("  - Invalid fcu_url parameter")
+            return None
+        
+        print("[PX4] PX4 boot process appears to be running")
         return _px4_process
         
+    except FileNotFoundError as e:
+        print(f"[PX4] ERROR: Could not find 'ros2' command")
+        print("[PX4] Make sure ROS 2 is installed and sourced")
+        return None
     except Exception as e:
         print(f"[PX4] Failed to boot PX4: {str(e)}")
         return None
