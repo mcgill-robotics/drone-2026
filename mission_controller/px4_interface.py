@@ -6,6 +6,8 @@ MAVROS must be running to use this interface
 
 import time
 import rclpy
+import subprocess
+import threading
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
 from geometry_msgs.msg import PoseStamped, TwistStamped,  QuaternionStamped
@@ -542,6 +544,109 @@ class PX4Interface(Node):
 
     # Global instance
     _autopilot = None
+
+
+# Global PX4 boot process tracker
+_px4_process = None
+
+
+def boot_px4(fcu_url="serial:///dev/ttyUSB0:921600", namespace="mavros"):
+    """
+    Boot PX4 via ros2 launch
+    
+    Args:
+        fcu_url: Flight Control Unit URL (e.g., "udp://127.0.0.1:14540")
+                - For SITL: "udp://127.0.0.1:14540"
+                - For hardware: "serial:///dev/ttyUSB0:921600" or similar
+        namespace: MAVROS namespace (default "mavros")
+    
+    Returns:
+        subprocess.Popen object if successful, None if failed
+        
+    Example:
+        px4_proc = boot_px4("udp://127.0.0.1:14540")
+        if px4_proc:
+            print("PX4 booting...")
+            time.sleep(5)  # Wait for PX4 to initialize
+            interface = init_px4()
+    """
+    global _px4_process
+    
+    # Check if PX4 is already running
+    if _px4_process is not None and _px4_process.poll() is None:
+        print("[PX4] PX4 is already running (PID: {})".format(_px4_process.pid))
+        return _px4_process
+    
+    print(f"[PX4] Booting PX4 with FCU URL: {fcu_url}")
+    
+    try:
+        # Build the ros2 launch command
+        cmd = [
+            "ros2", "launch", "mavros", "px4.launch",
+            f"fcu_url:={fcu_url}"
+        ]
+        
+        # Start the process
+        _px4_process = subprocess.Popen( #this is the same as running a subprocess
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True
+        )
+        
+        print(f"[PX4] PX4 booting process started (PID: {_px4_process.pid})")
+        print("[PX4] Waiting for PX4 to initialize...")
+        
+        return _px4_process
+        
+    except Exception as e:
+        print(f"[PX4] Failed to boot PX4: {str(e)}")
+        return None
+
+
+def stop_px4():
+    """
+    Stop the PX4/MAVROS process
+    
+    Returns:
+        True if process was stopped, False otherwise
+    """
+    global _px4_process
+    
+    if _px4_process is None:
+        print("[PX4] No PX4 process to stop")
+        return False
+    
+    if _px4_process.poll() is None:  # Process is still running
+        print(f"[PX4] Stopping PX4 process (PID: {_px4_process.pid})")
+        _px4_process.terminate()
+        
+        try:
+            _px4_process.wait(timeout=5)
+            print("[PX4] PX4 process stopped gracefully")
+        except subprocess.TimeoutExpired:
+            print("[PX4] Force killing PX4 process")
+            _px4_process.kill()
+            _px4_process.wait()
+        
+        return True
+    else:
+        print("[PX4] PX4 process already stopped")
+        return False
+
+
+def get_px4_status():
+    """Get status of PX4 boot process"""
+    global _px4_process
+    
+    if _px4_process is None:
+        return "Not started"
+    
+    poll_result = _px4_process.poll()
+    if poll_result is None:
+        return f"Running (PID: {_px4_process.pid})"
+    else:
+        return f"Stopped (exit code: {poll_result})"
 
 
 def init_px4(node_name="px4_interface", namespace="mavros"):
