@@ -1,7 +1,7 @@
 
 import rclpy
 import time
-from px4_interface import init_px4
+from px4_interface import init_px4, boot_px4, shutdown_px4
 
 def print_telemetry(px4):
     """Print all available telemetry from PX4"""
@@ -58,7 +58,7 @@ def print_telemetry(px4):
 
 def main():
     print("[MAIN] Starting PX4 interface test...")
-    
+    boot_px4();
     # Initialize and connect to MAVROS
     px4 = init_px4(namespace="mavros")
     
@@ -95,6 +95,7 @@ def main():
     
     # Cleanup
     px4.disconnect()
+    shutdown_px4()
     rclpy.shutdown()
     print("[MAIN] Shutdown complete")
 
