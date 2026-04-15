@@ -1,7 +1,7 @@
 
 import rclpy
 import time
-from px4_interface import init_px4
+from px4_interface import init_px4, boot_px4, stop_px4
 
 def print_telemetry(px4):
     """Print all available telemetry from PX4"""
@@ -59,13 +59,27 @@ def print_telemetry(px4):
 def main():
     print("[MAIN] Starting PX4 interface test...")
     
+    # Boot PX4 with SITL (simulation)
+    # For hardware, use: boot_px4("serial:///dev/ttyUSB0:921600")
+    print("[MAIN] Booting PX4...")
+    px4_proc = boot_px4()  # Uses default SITL URL: udp://127.0.0.1:14540
+    
+    if not px4_proc:
+        print("[MAIN] Failed to boot PX4 process")
+        return
+    
     # Initialize and connect to MAVROS
+    print("[MAIN] Initializing MAVROS interface...")
     px4 = init_px4(namespace="mavros")
     
     # Check if connected
     if not px4.connected:
         print("[MAIN] Failed to connect to MAVROS")
-        print("[MAIN] Make sure MAVROS is running!")
+        print("[MAIN] Make sure:")
+        print("  1. PX4 SITL is running or hardware is connected")
+        print("  2. MAVROS is properly configured")
+        print("[MAIN] Shutting down...")
+        stop_px4()
         return
     
     print("[MAIN] Successfully connected to MAVROS")
@@ -95,6 +109,7 @@ def main():
     
     # Cleanup
     px4.disconnect()
+    stop_px4()
     rclpy.shutdown()
     print("[MAIN] Shutdown complete")
 
