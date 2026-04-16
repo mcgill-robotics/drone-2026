@@ -290,9 +290,6 @@ def main():
     # px4_proc = boot_px4()  # Uses default SITL URL: udp://127.0.0.1:14540
     px4_proc = None
     
-    if not px4_proc:
-        print("[MAIN] Failed to boot PX4 process")
-        return
     
     # Initialize and connect to MAVROS
     print("[MAIN] Initializing MAVROS interface...")
