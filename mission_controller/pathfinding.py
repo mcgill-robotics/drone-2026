@@ -122,13 +122,13 @@ class PotentialFieldPathfinding(PathfindingStrategy):
     
     def repulsive_force(self, current):
         """Calculate repulsive force from obstacles"""
-        force_x, force_y = 0, 0
+        force_x, force_y = 0, 0 # zero force
         for obstacle in self.obstacles:
             distance = current.distance_to(obstacle)
-            if distance < self.obstacle_radius:
-                direction = (current.x - obstacle.x, current.y - obstacle.y)
+            if distance < self.obstacle_radius: #Only obstacles within a threshold radius exert a repulsive force — distant obstacles are ignored entirely.
+                direction = (current.x - obstacle.x, current.y - obstacle.y) 
                 dist_norm = (direction[0]**2 + direction[1]**2)**0.5
-                if dist_norm > 0:
+                if dist_norm > 0: # 
                     force_x += direction[0] / dist_norm * self.repulsive_force_gain
                     force_y += direction[1] / dist_norm * self.repulsive_force_gain
         return (force_x, force_y)
