@@ -176,6 +176,7 @@ class PX4Getters(Node):
             PoseStamped,
             f"/{namespace}/local_position/pose",
             self._position_callback,
+            # default queue size is 5, for sensor data, drops older msg if not needed
             qos_profile_sensor_data
         )
 
@@ -335,7 +336,6 @@ class PX4Getters(Node):
         )
 
         print(f"[PX4] Initialized MAVROS interface (namespace: {namespace})")
-        print("[PX4] Debug: subscriptions created for pose/odom/velocity/imu/altitude/GPS/RTK")
 
     # =========================================================
     # Callbacks

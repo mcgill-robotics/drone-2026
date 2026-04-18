@@ -168,7 +168,7 @@ class PX4Setters:
                 print("[PX4][WARN] GUIDED mode failed. If using PX4, you may need OFFBOARD instead.")
                 return False
 
-            req = CommandTOL.Request()
+            req = CommandTOL.Request() # takeoff and land request
             req.altitude = float(altitude)
 
             future = self.takeoff_client.call_async(req)
