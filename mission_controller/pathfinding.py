@@ -128,7 +128,7 @@ class PotentialFieldPathfinding(PathfindingStrategy):
             if distance < self.obstacle_radius: #Only obstacles within a threshold radius exert a repulsive force — distant obstacles are ignored entirely.
                 direction = (current.x - obstacle.x, current.y - obstacle.y) 
                 dist_norm = (direction[0]**2 + direction[1]**2)**0.5
-                if dist_norm > 0: # 
+                if dist_norm > 0: 
                     force_x += direction[0] / dist_norm * self.repulsive_force_gain
                     force_y += direction[1] / dist_norm * self.repulsive_force_gain
         return (force_x, force_y)
