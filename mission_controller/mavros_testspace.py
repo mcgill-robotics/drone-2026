@@ -281,6 +281,36 @@ def print_full_snapshot(px4):
     print("=" * 60 + "\n")
 
 
+def view_camera():
+    """Display live camera feed from RealSense D455"""
+    print("\n" + "="*70)
+    print("CAMERA LIVE STREAM")
+    print("="*70 + "\n")
+    
+    # Initialize ROS
+    rclpy.init()
+    
+    # Initialize PX4 interface
+    from px4_interface import PX4Getters
+    px4 = PX4Getters()
+    
+    # Wait for camera frames
+    print("[CAMERA] Waiting for camera frames...")
+    for i in range(50):
+        rclpy.spin_once(px4, timeout_sec=0.05)
+        if px4.get_camera_frame() is not None:
+            print("[CAMERA] ✓ Frames received!")
+            break
+    
+    # Display camera
+    print("[CAMERA] Press 'q' in the window to quit\n")
+    px4.display_camera_frames()
+    
+    # Cleanup
+    px4.disconnect()
+    rclpy.shutdown()
+
+
 def main():
     print("[MAIN] Starting PX4 interface test...")
     
@@ -343,4 +373,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    view_camera()
