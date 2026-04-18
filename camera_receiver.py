@@ -18,7 +18,7 @@ class D455Receiver:
         Initialize the receiver.
         
         Args:
-            jetson_ip: IP address of the Jetson (e.g., "192.168.1.100")
+            jetson_ip: IP address of the Jetson (dynamic, need to verify)
             port: Port to connect to
         """
         self.jetson_ip = jetson_ip
@@ -28,9 +28,12 @@ class D455Receiver:
     
     def connect(self):
         """Connect to the Jetson streamer."""
+        # sokcet: low-level communication endpoint
+        #create TCP/IP socket
         self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         try:
             print(f"Connecting to {self.jetson_ip}:{self.port}...")
+            # try connetion
             self.socket.connect((self.jetson_ip, self.port))
             print("Connected!")
             self.running = True
@@ -43,6 +46,8 @@ class D455Receiver:
         """Receive exactly num_bytes from socket."""
         data = b''
         while len(data) < num_bytes:
+            # socket.recv might return fewer bytes than requested
+            # will keep looping until the request bytes
             chunk = self.socket.recv(num_bytes - len(data))
             if not chunk:
                 raise ConnectionResetError("Connection closed by server")
@@ -61,6 +66,7 @@ class D455Receiver:
         try:
             # Receive header: [frame_type(1 byte)] [size(4 bytes)]
             header = self._receive_exact(5)
+            # B: big-endian byte order (1byte), I: unsigned int (4bytes)"
             frame_type, frame_size = struct.unpack('>BI', header)
             
             # Receive frame data
@@ -82,6 +88,7 @@ class D455Receiver:
         
         print("Displaying stream... Press 'q' to quit")
         
+        #continousoly receives and displays frames until user quits
         while self.running:
             frame_type, frame = self.receive_frame()
             
@@ -90,11 +97,11 @@ class D455Receiver:
             
             # Display frame
             if frame_type == 1:
-                cv2.imshow("RealSense - RGB", frame)
+                cv2.imshow("RealSense - RGB", frame) # color img
             elif frame_type == 2:
-                cv2.imshow("RealSense - Depth", frame)
-            
-            # Check for quit
+                cv2.imshow("RealSense - Depth", frame) # grascale depth
+
+            # Check for quit for keyboard 'q' every 1 milliseconds
             if cv2.waitKey(1) & 0xFF == ord('q'):
                 break
         
