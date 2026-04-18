@@ -36,11 +36,6 @@ class PX4Setters:
     - is_armed()
     """
 
-    # =========================================================
-    # Service-based control APIs
-    # These use MAVROS services and wait for a response.
-    # =========================================================
-
     def arm_vehicle(self, timeout=20):
         """
         Arm the vehicle (allow motors to spin)
@@ -58,16 +53,18 @@ class PX4Setters:
 
         print("[PX4] Arming vehicle...")
         try:
-            req = CommandBool.Request()
-            req.value = True
+            req = CommandBool.Request() #this just creates a service message that has the arm state
+            req.value = True #we edit the message so we want it to be true (to arm)
 
-            future = self.arming_client.call_async(req)
+            future = self.arming_client.call_async(req) #we send the request. 
+            #arming_client comes from the getters, where the services are called
 
             start = time.time()
             while not future.done() and (time.time() - start) < timeout:
+                #we spin until we get a response
                 rclpy.spin_once(self, timeout_sec=0.1)
                 time.sleep(0.1)
-
+            #future.done() checks if smt received, .result() checks if something is in, .success is state
             if future.done() and future.result() and future.result().success:
                 print("[PX4] Vehicle armed successfully")
                 return True
@@ -90,8 +87,8 @@ class PX4Setters:
 
         print("[PX4] Disarming vehicle...")
         try:
-            req = CommandBool.Request()
-            req.value = False
+            req = CommandBool.Request() #create req message
+            req.value = False #set the content of the req to false
 
             future = self.arming_client.call_async(req)
 
@@ -124,8 +121,9 @@ class PX4Setters:
 
         print(f"[PX4] Changing mode to {mode_name}...")
         try:
+            # this message type is just to set mode
             req = SetMode.Request()
-            req.custom_mode = mode_name
+            req.custom_mode = mode_name #set the specific mode we want in req
 
             future = self.set_mode_client.call_async(req)
 
@@ -178,7 +176,8 @@ class PX4Setters:
             start = time.time()
             while not future.done() and (time.time() - start) < timeout:
                 rclpy.spin_once(self, timeout_sec=0.1)
-
+                #here, we dont need to check if we received a message, because
+                #the drone checks for altitude, so its actually already robust
                 if self.current_position:
                     current_alt = self.current_position.pose.position.z
                     if current_alt >= (altitude * 0.95):  # 95% of target
@@ -262,7 +261,7 @@ class PX4Setters:
                 return False
 
             setpoint = PoseStamped()
-            setpoint.header.stamp = self.get_clock().now().to_msg()
+            setpoint.header.stamp = self.get_clock().now().to_msg() #set all the fields
             setpoint.header.frame_id = "map"
             setpoint.pose.position.x = lat
             setpoint.pose.position.y = lon
@@ -280,7 +279,9 @@ class PX4Setters:
         Publish a local position setpoint.
 
         NOTE:
-        This is a topic publish, not a service call.
+        This is a topic publish , not a service call. (messages vs services)
+        In other words, the following functions below just send a command,
+        but do not expect a response.
         """
         try:
             msg = PoseStamped()

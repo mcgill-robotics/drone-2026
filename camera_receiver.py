@@ -123,6 +123,6 @@ def display_stream(jetson_ip: str, port: int = 5005):
 
 if __name__ == "__main__":
     # Configure your Jetson's IP address here
-    JETSON_IP = "192.168.1.100"  # Change this to your Jetson's IP
+    JETSON_IP = "10.69.43.252"  # Change this to your Jetson's IP
     
     display_stream(JETSON_IP)
