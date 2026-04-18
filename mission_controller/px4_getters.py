@@ -1134,7 +1134,12 @@ class PX4Getters(Node):
             # Throttle display to fps_limit
             if current_time - last_frame_time < frame_interval:
                 time.sleep(0.001)
+                # Process ROS messages even while throttling
+                rclpy.spin_once(self, timeout_sec=0.0001)
                 continue
+            
+            # Process ROS 2 messages to receive new camera frames
+            rclpy.spin_once(self, timeout_sec=0.001)
             
             frame = self.current_camera_frame
             
