@@ -1,6 +1,20 @@
 import rclpy
 import time
 from px4_interface import init_px4
+from px4_getters import get_jetson_ip
+
+
+def print_jetson_info():
+    """
+    Print Jetson IP address at the very beginning of testspace execution.
+    This retrieves the IP using the get_jetson_ip() function from px4_getters.
+    """
+    ip_address = get_jetson_ip()
+    print("=" * 60)
+    print("[JETSON INFO]")
+    print(f"IP Address: {ip_address}")
+    print("=" * 60)
+    print()
 
 
 def test_mode_change(px4):

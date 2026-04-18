@@ -26,6 +26,7 @@ class D455Streamer:
         """
         self.host = host
         self.port = port
+        #true = stream RBG+Depth (2 freames/itertaion), otherwise 1 frame/iteration
         self.include_depth = include_depth
         self.running = False
         self.client_socket: Optional[socket.socket] = None

@@ -12,6 +12,7 @@ It focuses on reading data that is already being published by MAVROS.
 
 import time
 import math
+import subprocess
 import rclpy
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
@@ -1245,3 +1246,35 @@ class PX4Getters(Node):
         
         print("Topic: /camera/camera/color/image_raw")
         print("=" * 60)
+
+
+# =========================================================
+# Utility Functions
+# =========================================================
+
+def get_jetson_ip():
+    """
+    Retrieve the IP address of the Jetson by running 'hostname -I'.
+    
+    This is a module-level function that can be called independently
+    of the PX4Getters class.
+    
+    Returns:
+        str: The IP address of the Jetson (e.g., "192.168.1.100")
+             Returns "IP_NOT_FOUND" if unable to retrieve
+    """
+    try:
+        result = subprocess.run(['hostname', '-I'], 
+                              capture_output=True, 
+                              text=True, 
+                              timeout=5)
+        if result.returncode == 0:
+            # hostname -I returns multiple IPs separated by spaces
+            # Get the first one (usually the primary interface)
+            ip_addresses = result.stdout.strip().split()
+            if ip_addresses:
+                return ip_addresses[0]
+        return "IP_NOT_FOUND"
+    except Exception as e:
+        print(f"[ERROR] Failed to get Jetson IP: {str(e)}")
+        return "IP_NOT_FOUND"
