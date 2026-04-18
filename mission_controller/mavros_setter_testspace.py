@@ -7,6 +7,7 @@ def test_mode_change(px4):
     """Test changing flight mode"""
     print("[TEST] Testing mode change...")
 
+    # log mode before, attempt OFFBOARD switch, log result
     print_current_mode(px4, prefix="[TEST][BEFORE]")
     success = px4.change_mode("OFFBOARD")
     print(f"[TEST] change_mode('OFFBOARD') -> {success}")
@@ -16,6 +17,7 @@ def test_mode_change(px4):
         rclpy.spin_once(px4, timeout_sec=0.1)
         time.sleep(0.1)
 
+    # log mode after switch and print separator
     print_current_mode(px4, prefix="[TEST][AFTER]")
     print("-" * 60)
 
@@ -24,6 +26,7 @@ def test_position_setpoint(px4):
     """Test sending a local position setpoint"""
     print("[TEST] Testing position setpoint...")
 
+    # fetch current location; skip test if unavailable
     loc = px4.get_location()
     if not loc:
         print("[TEST] Cannot test position setpoint because local position is unavailable")
@@ -35,6 +38,7 @@ def test_position_setpoint(px4):
     target_y = loc["y"]
     target_z = loc["z"]
 
+    # send setpoint to current position and log result
     success = px4.send_position_setpoint(target_x, target_y, target_z)
     print(f"[TEST] send_position_setpoint({target_x}, {target_y}, {target_z}) -> {success}")
     print("-" * 60)
@@ -45,9 +49,11 @@ def test_velocity_setpoint(px4, duration_sec=3.0):
     print("[TEST] Testing velocity setpoint stream...")
     print("[TEST] Sending zero velocity for a few seconds")
 
+    # track elapsed time and successful publish count
     start = time.time()
     success_count = 0
 
+    # stream zero velocity setpoints for duration_sec, counting successes
     while time.time() - start < duration_sec:
         rclpy.spin_once(px4, timeout_sec=0.1)
         success = px4.send_velocity_setpoint(0.0, 0.0, 0.0, 0.0)
@@ -55,6 +61,7 @@ def test_velocity_setpoint(px4, duration_sec=3.0):
             success_count += 1
         time.sleep(0.1)
 
+    # log total successful publishes and print separator
     print(f"[TEST] Velocity setpoint publish count: {success_count}")
     print("-" * 60)
 
@@ -63,14 +70,17 @@ def test_start_offboard(px4):
     """Test offboard warmup + mode switch"""
     print("[TEST] Testing start_offboard()...")
 
+    
     print_current_mode(px4, prefix="[TEST][BEFORE]")
     success = px4.start_offboard()
     print(f"[TEST] start_offboard() -> {success}")
 
+    # spin a few times so state message has time to update
     for _ in range(10):
         rclpy.spin_once(px4, timeout_sec=0.1)
         time.sleep(0.1)
 
+    # log mode after switch and print separator
     print_current_mode(px4, prefix="[TEST][AFTER]")
     print("-" * 60)
 
@@ -109,8 +119,10 @@ def main():
     print("[MAIN] Starting PX4 setter test...")
     print("[MAIN] Assuming MAVROS is already running externally...")
 
+    # initialize PX4 ROS2 node under the mavros namespace
     px4 = init_px4(namespace="mavros")
 
+    # abort early if MAVROS connection failed; attempt clean shutdown
     if not px4.connected:
         print("[MAIN] Failed to connect to MAVROS")
         print("[MAIN] Make sure:")
@@ -135,6 +147,7 @@ def main():
         rclpy.spin_once(px4, timeout_sec=0.1)
         time.sleep(0.1)
 
+    # snapshot telemetry health and current mode before running tests
     px4.print_telemetry_health()
     print_current_mode(px4, prefix="[MAIN]")
 
@@ -158,6 +171,7 @@ def main():
     print("[MAIN] Setter test complete")
     px4.disconnect()
 
+    #shutdown 
     if rclpy.ok():
         rclpy.shutdown()
 
