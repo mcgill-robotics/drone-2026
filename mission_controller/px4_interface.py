@@ -35,7 +35,7 @@ _autopilot = None
 _px4_process = None
 
 
-def boot_px4(fcu_url="serial:///dev/ttyUSB0:921600", namespace="mavros"):
+def boot_px4(fcu_url="serial:///dev/ttyTHS1:921600", namespace="mavros"):
     """
     Boot PX4 via ros2 launch
 
