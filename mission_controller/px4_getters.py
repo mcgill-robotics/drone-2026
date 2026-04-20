@@ -43,9 +43,10 @@ except ImportError:
 try:
     from cv_bridge import CvBridge
     CVBRIDGE_AVAILABLE = True
-except ImportError:
+except (ImportError, AttributeError) as e:
     CVBRIDGE_AVAILABLE = False
     CvBridge = None
+    print(f"[WARNING] cv_bridge import failed: {e}. Camera functionality disabled.")
 
 
 class PX4Getters(Node):

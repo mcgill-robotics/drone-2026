@@ -387,4 +387,4 @@ def main():
 
 
 if __name__ == "__main__":
-    view_camera()
+    boot_px4()
