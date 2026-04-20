@@ -10,6 +10,17 @@ This file does NOT directly command the drone.
 It focuses on reading data that is already being published by MAVROS.
 """
 
+# NumPy 2.0+ compatibility patch for compiled modules built with NumPy 1.x
+import sys
+try:
+    import numpy as np
+    if hasattr(np, '__version__') and np.__version__.startswith('2.'):
+        # Suppress _ARRAY_API attribute errors from NumPy 1.x compiled modules
+        import warnings
+        warnings.filterwarnings('ignore', category=AttributeError, message='.*_ARRAY_API.*')
+except Exception:
+    pass
+
 import time
 import math
 import subprocess
@@ -46,7 +57,6 @@ try:
 except (ImportError, AttributeError) as e:
     CVBRIDGE_AVAILABLE = False
     CvBridge = None
-    print(f"[WARNING] cv_bridge import failed: {e}. Camera functionality disabled.")
 
 
 class PX4Getters(Node):
