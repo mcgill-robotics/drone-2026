@@ -53,37 +53,43 @@ class FlightMission:
             # Step 1: Check connection
             self.log("[MISSION] Checking MAVROS connection...")
             if not self.px4.connected:
-                self.log("[MISSION] ❌ Not connected to MAVROS!")
+                self.log("[MISSION] Not connected to MAVROS")
                 return False
-            self.log("[MISSION] ✓ Connected to MAVROS")
+            self.log("[MISSION] Connected to MAVROS")
 
             # Step 2: Arm vehicle
-            self.log("\n[MISSION] Step 1/6: Arming vehicle...")
-            if not self.px4.arm_vehicle():
-                self.log("[MISSION] ❌ Failed to arm!")
+            try:
+                self.log("\n[MISSION] Step 1/6: Arming vehicle...")
+                if not self.px4.arm_vehicle():
+                    self.log("[MISSION] Failed to arm")
+                    return False
+                self.log("[MISSION] Vehicle armed")
+            except Exception as e:
+                self.log(f"[MISSION] Error while arming: {str(e)}")
                 return False
-            self.log("[MISSION] ✓ Vehicle armed")
 
             time.sleep(1)
 
             # Step 3: Take off
             self.log("\n[MISSION] Step 2/6: Taking off to 5m...")
-            if not self.px4.takeoff(altitude=5.0, timeout=30):
-                self.log("[MISSION] ❌ Failed to take off!")
-                self.px4.disarm_vehicle()
+            try:
+                if not self.px4.takeoff(altitude=5.0, timeout=30):
+                    self.log("[MISSION] Failed to take off!")
+                    self.px4.disarm_vehicle()
+                    return False
+                self.log("[MISSION] Reached cruise altitude")
+            except Exception as e:
+                self.log(f"[MISSION] Error while taking off: {str(e)}")
                 return False
-            self.log("[MISSION] ✓ Reached cruise altitude")
 
             # Record starting position
             if self.px4.current_position:
                 self.start_position = self.px4.current_position.pose.position
                 self.log(f"[MISSION] Start position: X={self.start_position.x:.2f}, Y={self.start_position.y:.2f}")
 
-            # Step 4: Switch to OFFBOARD and stream setpoints
-            self.log("\n[MISSION] Step 3/6: Switching to OFFBOARD mode...")
-            if not self.px4.start_offboard():
-                self.log("[MISSION] ⚠️  OFFBOARD mode failed, continuing with GUIDED...")
-                # Continue anyway, GUIDED can work too
+            # Step 4: Stream velocity setpoints (GUIDED mode supports this directly)
+            # No need to switch to OFFBOARD - GUIDED works fine for velocity control
+            self.log("\n[MISSION] Step 3/6: Streaming velocity setpoints...")
 
             time.sleep(1)
 
@@ -105,14 +111,14 @@ class FlightMission:
             # Step 7: Land
             self.log("\n[MISSION] Step 6/6: Landing...")
             if not self.px4.land(timeout=30):
-                self.log("[MISSION] ⚠️  Land timeout, disarming anyway...")
+                self.log("[MISSION] Land timeout, disarming anyway...")
             self.log("[MISSION] ✓ Landed")
 
             time.sleep(1)
 
             # Step 8: Disarm
             if not self.px4.disarm_vehicle():
-                self.log("[MISSION] ⚠️  Failed to disarm, trying again...")
+                self.log("[MISSION] Failed to disarm, trying again...")
                 time.sleep(1)
                 self.px4.disarm_vehicle()
 
@@ -125,7 +131,7 @@ class FlightMission:
             return True
 
         except Exception as e:
-            self.log(f"\n[MISSION] ❌ Exception: {str(e)}")
+            self.log(f"\n[MISSION] Exception: {str(e)}")
             self.log("[MISSION] Attempting emergency disarm...")
             try:
                 self.px4.disarm_vehicle()
@@ -200,7 +206,7 @@ Examples:
     px4 = init_px4(namespace="mavros")
 
     if not px4.connected:
-        print("[MAIN] ❌ Failed to connect to MAVROS")
+        print("[MAIN] Failed to connect to MAVROS")
         print("[MAIN] Make sure:")
         print("  1. PX4 SITL is running or hardware is connected")
         print("  2. MAVROS is properly configured")
