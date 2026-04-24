@@ -2,21 +2,29 @@
 """
 Flight mission script for PX4/MAVROS
 
-This script demonstrates a complete autonomous flight sequence:
+This script demonstrates a complete autonomous flight sequence using OFFBOARD mode:
 1. Boot PX4
 2. Connect to MAVROS
-3. Wait for drone to be armed manually (via RC remote or button)
-4. Take off
-5. Move forward and backward
-6. Return to starting position
-7. Land and disarm
+3. Switch to OFFBOARD mode and warm up setpoint stream
+4. Wait for drone to be armed manually (via RC remote or button)
+5. Climb to 5m altitude
+6. Move forward and backward
+7. Land
+8. Disarm
+
+OFFBOARD MODE:
+- Requires continuous setpoint publishing (>2Hz)
+- Script starts streaming zero-velocity setpoints immediately
+- Once armed, drone executes velocity commands
+- Provides direct control over drone motion
 
 WORKFLOW:
 1. SSH into Jetson and run: python3 flight_mission.py --hardware
-2. Script will output: "Waiting for drone to be armed..."
-3. You can now disconnect the ethernet cable
-4. Arm the drone manually (via RC remote switch or button)
-5. Script will detect arm and automatically execute the mission
+2. Script will output: "OFFBOARD mode active, setpoints streaming"
+3. Script will output: "Waiting for drone to be armed..."
+4. You can now disconnect the ethernet cable
+5. Arm the drone manually (via RC remote switch or button)
+6. Script will detect arm and automatically execute the mission
 
 Usage:
     python3 flight_mission.py --sitl              # Use SITL simulation
@@ -66,7 +74,17 @@ class FlightMission:
                 return False
             self.log("[MISSION] Connected to MAVROS")
 
-            # Step 2: Wait for drone to be armed (manual arming via RC or other method)
+            # Step 2: Switch to OFFBOARD mode and warm up setpoint stream
+            self.log("\n[MISSION] Switching to OFFBOARD mode and warming up setpoints...")
+            self.log("[MISSION] OFFBOARD requires >2Hz setpoint publishing")
+            
+            if not self.px4.start_offboard():
+                self.log("[MISSION] OFFBOARD mode failed!")
+                return False
+            
+            self.log("[MISSION] OFFBOARD mode active, setpoints streaming")
+
+            # Step 3: Wait for drone to be armed (manual arming via RC or other method)
             self.log("\n[MISSION] Waiting for drone to be armed...")
             
             if self.auto_arm:
@@ -75,7 +93,7 @@ class FlightMission:
                 if not self.px4.arm_vehicle():
                     self.log("[MISSION] Failed to arm via API")
                     return False
-                self.log("[MISSION] ✓ Vehicle armed (automatic)")
+                self.log("[MISSION] Vehicle armed (automatic)")
             else:
                 # Wait for manual arm
                 self.log("[MISSION] You can now disconnect the ethernet cable")
@@ -94,21 +112,34 @@ class FlightMission:
                     self.log("[MISSION] Timeout waiting for arm. Exiting.")
                     return False
                 
-                self.log("[MISSION] ✓ Drone armed! Starting mission...")
+                self.log("[MISSION] Drone armed! Starting mission...")
 
             time.sleep(1)
 
-            # Step 3: Take off
-            self.log("\n[MISSION] Step 1/5: Taking off to 5m...")
-            try:
-                if not self.px4.takeoff(altitude=5.0, timeout=30):
-                    self.log("[MISSION] Failed to take off!")
-                    self.px4.disarm_vehicle()
-                    return False
-                self.log("[MISSION] Reached cruise altitude")
-            except Exception as e:
-                self.log(f"[MISSION] Error while taking off: {str(e)}")
-                return False
+            # Step 4: Climb to altitude using OFFBOARD velocity setpoints
+            # In OFFBOARD mode, we use velocity commands instead of takeoff service
+            self.log("\n[MISSION] Step 1/5: Climbing to 5m altitude...")
+            
+            # Climb upward (negative Z in NED frame)
+            climb_duration = 10.0  # Should be enough to reach ~5m at 0.5 m/s
+            climb_speed = 0.5  # m/s upward
+            self.px4.send_velocity_setpoint(0.0, 0.0, -climb_speed, 0.0)  # Negative Z = up in NED
+            
+            start_climb = time.time()
+            while (time.time() - start_climb) < climb_duration:
+                self.px4.send_velocity_setpoint(0.0, 0.0, -climb_speed, 0.0)
+                rclpy.spin_once(self.px4, timeout_sec=0.05)
+                
+                # Check if we've reached target altitude
+                if self.px4.current_position:
+                    alt = self.px4.current_position.pose.position.z
+                    if alt >= 4.5:  # Within 0.5m of target
+                        self.log(f"[MISSION] ✓ Reached altitude: {alt:.2f}m")
+                        break
+                
+                time.sleep(0.05)
+            
+            self.log("[MISSION] Reached cruise altitude")
 
             # Record starting position
             if self.px4.current_position:
@@ -136,11 +167,31 @@ class FlightMission:
             self.log("\n[MISSION] Hovering for 2 seconds...")
             self.px4.hover(duration=2.0)
 
-            # Step 7: Land
+            # Step 6: Land using OFFBOARD velocity setpoints
             self.log("\n[MISSION] Step 5/5: Landing...")
-            if not self.px4.land(timeout=30):
-                self.log("[MISSION] Land timeout, disarming anyway...")
-            self.log("[MISSION] ✓ Landed")
+            
+            # Descend downward (positive Z in NED frame)
+            land_speed = 0.5  # m/s downward
+            self.log("[MISSION] Descending...")
+            
+            while True:
+                self.px4.send_velocity_setpoint(0.0, 0.0, land_speed, 0.0)  # Positive Z = down in NED
+                rclpy.spin_once(self.px4, timeout_sec=0.05)
+                
+                # Check if we've landed (altitude close to ground)
+                if self.px4.current_position:
+                    alt = self.px4.current_position.pose.position.z
+                    if alt <= 0.2:  # Close to ground
+                        self.log(f"[MISSION] ✓ Landed at altitude: {alt:.2f}m")
+                        break
+                
+                time.sleep(0.05)
+            
+            # Stop descending (zero velocity)
+            for _ in range(5):
+                self.px4.send_velocity_setpoint(0.0, 0.0, 0.0, 0.0)
+                rclpy.spin_once(self.px4, timeout_sec=0.05)
+                time.sleep(0.05)
 
             time.sleep(1)
 
