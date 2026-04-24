@@ -366,3 +366,123 @@ class PX4Setters:
         """
         print("[PX4] RC override not yet implemented in MAVROS wrapper")
         return False
+
+    # =========================================================
+    # Movement APIs - high-level flight helpers
+    # =========================================================
+
+    def fly_forward(self, speed, duration):
+        """
+        Fly forward at specified speed for specified duration
+
+        Args:
+            speed: Forward speed in m/s (positive = forward, negative = backward)
+            duration: How long to fly in seconds
+        """
+        print(f"[PX4] Flying forward at {speed} m/s for {duration}s")
+        start_time = time.time()
+        while (time.time() - start_time) < duration:
+            self.send_velocity_setpoint(speed, 0.0, 0.0, 0.0)
+            rclpy.spin_once(self, timeout_sec=0.05)
+            time.sleep(0.05)
+        print("[PX4] Forward flight complete")
+        return True
+
+    def fly_backward(self, speed, duration):
+        """
+        Fly backward at specified speed for specified duration (opposite of forward)
+
+        Args:
+            speed: Backward speed in m/s (positive = backward)
+            duration: How long to fly in seconds
+        """
+        print(f"[PX4] Flying backward at {speed} m/s for {duration}s")
+        self.fly_forward(-speed, duration)
+        return True
+
+    def move_to_offset(self, x_offset, y_offset, z_offset, timeout=30):
+        """
+        Move drone by a relative offset from current position
+
+        Args:
+            x_offset: Offset in X direction (m)
+            y_offset: Offset in Y direction (m)
+            z_offset: Offset in Z direction (m)
+            timeout: Maximum time to reach target (seconds)
+        """
+        if not self.current_position:
+            print("[PX4] Current position unknown, cannot move to offset")
+            return False
+
+        current = self.current_position.pose.position
+        target_x = current.x + x_offset
+        target_y = current.y + y_offset
+        target_z = current.z + z_offset
+
+        return self.move_to_position(target_x, target_y, target_z, timeout)
+
+    def move_to_position(self, x, y, z, timeout=30):
+        """
+        Move drone to absolute position using velocity setpoints
+
+        Args:
+            x: Target X position (m)
+            y: Target Y position (m)
+            z: Target Z position (m)
+            timeout: Maximum time to reach target (seconds)
+        """
+        if not self.current_position:
+            print("[PX4] Current position unknown, cannot move to position")
+            return False
+
+        print(f"[PX4] Moving to position ({x:.2f}, {y:.2f}, {z:.2f})")
+
+        start_time = time.time()
+        tolerance = 0.2  # 20cm tolerance
+
+        while (time.time() - start_time) < timeout:
+            current = self.current_position.pose.position
+            
+            # Calculate direction to target
+            dx = x - current.x
+            dy = y - current.y
+            dz = z - current.z
+            distance = (dx**2 + dy**2 + dz**2)**0.5
+
+            # Check if reached target
+            if distance < tolerance:
+                print(f"[PX4] Reached target position")
+                self.send_velocity_setpoint(0.0, 0.0, 0.0, 0.0)
+                return True
+
+            # Calculate velocity command (simple proportional controller)
+            max_speed = 1.0  # m/s
+            if distance > 0:
+                vx = (dx / distance) * max_speed
+                vy = (dy / distance) * max_speed
+                vz = (dz / distance) * max_speed
+            else:
+                vx = vy = vz = 0.0
+
+            self.send_velocity_setpoint(vx, vy, vz, 0.0)
+            rclpy.spin_once(self, timeout_sec=0.05)
+            time.sleep(0.05)
+
+        print(f"[PX4] Timeout reaching position")
+        return False
+
+    def hover(self, duration):
+        """
+        Hover in place for specified duration
+
+        Args:
+            duration: How long to hover in seconds
+        """
+        print(f"[PX4] Hovering for {duration}s")
+        start_time = time.time()
+        while (time.time() - start_time) < duration:
+            self.send_velocity_setpoint(0.0, 0.0, 0.0, 0.0)
+            rclpy.spin_once(self, timeout_sec=0.05)
+            time.sleep(0.05)
+        print("[PX4] Hover complete")
+        return True
