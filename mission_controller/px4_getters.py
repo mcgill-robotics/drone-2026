@@ -602,24 +602,22 @@ class PX4Getters(Node):
     # =========================================================
 
     def _wait_for_connection(self, timeout=None):
-        """Wait for MAVROS connection to be established"""
+        """Wait until MAVROS reports the FCU is actually connected (heartbeat received)."""
         if timeout is None:
             timeout = self.timeout
 
         start = time.time()
-        # Check if we're receiving state messages instead of relying only on connected flag
-        while self.current_state is None and (time.time() - start) < timeout:
+        while (time.time() - start) < timeout:
             rclpy.spin_once(self, timeout_sec=0.1)
+            if self.current_state is not None and self.current_state.connected:
+                print("[PX4] Connected to MAVROS (FCU heartbeat received)")
+                self.connected = True
+                return True
             time.sleep(0.1)
 
-        if self.current_state is not None:
-            print("[PX4] Connected to MAVROS (receiving state messages)")
-            self.connected = True
-            return True
-        else:
-            print("[PX4] Failed to connect to MAVROS")
-            self.connected = False
-            return False
+        print("[PX4] Failed to get FCU heartbeat within timeout")
+        self.connected = False
+        return False
 
     def connect(self):
         """
