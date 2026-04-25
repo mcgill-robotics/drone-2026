@@ -138,7 +138,8 @@ class PX4Setters:
             future = self.set_mode_client.call_async(req)
 
             start = time.time()
-            while not future.done() and (time.time() - start) < timeout:
+            elapsed = 0
+            while not future.done() and elapsed < timeout:
                 # CRITICAL: Keep publishing setpoints during mode change
                 # PX4 OFFBOARD mode requires continuous setpoint stream (>2Hz)
                 # If we stop publishing, PX4 may reject the mode change
@@ -147,15 +148,28 @@ class PX4Setters:
                 
                 rclpy.spin_once(self, timeout_sec=0.1)
                 time.sleep(0.1)
+                elapsed = time.time() - start
+                
+                if int(elapsed) % 5 == 0 and elapsed < int(elapsed) + 0.1:
+                    print(f"[PX4] Waiting for mode change response... ({int(elapsed)}s)")
 
-            if future.done() and future.result() and future.result().mode_sent:
-                print(f"[PX4] Mode changed to {mode_name}")
+            if not future.done():
+                print(f"[PX4] Mode change request TIMED OUT after {timeout}s")
+                return False
+            
+            result = future.result()
+            if result and result.mode_sent:
+                print(f"[PX4] ✓ Mode changed to {mode_name}")
                 return True
             else:
-                print("[PX4] Mode change failed")
+                print(f"[PX4] Mode change REJECTED by PX4 (mode_sent=False)")
+                if result:
+                    print(f"[PX4] Response: {result}")
                 return False
         except Exception as e:
-            print(f"[PX4] Mode change failed: {str(e)}")
+            print(f"[PX4] Mode change EXCEPTION: {str(e)}")
+            import traceback
+            traceback.print_exc()
             return False
 
     def takeoff(self, altitude, timeout=60):
