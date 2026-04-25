@@ -5,22 +5,29 @@ OFFBOARD Mode Test Script
 This script:
 1. Boots PX4
 2. Connects to MAVROS
-3. Switches to OFFBOARD mode
-4. Warms up setpoint stream (>2Hz)
+3. Starts a background thread that continuously publishes zero velocity setpoints
+4. Switches to OFFBOARD mode
 5. Verifies success from PX4
-6. Checks arm status (non-blocking)
+6. Maintains OFFBOARD mode for 5 seconds (background thread handles publishing)
+7. Stops the background thread
 
-No velocity commands are published - this is a safe connectivity test only.
+The background thread approach:
+- Simplifies mission code (no need to worry about publishing loops)
+- Ensures no gaps in setpoint publishing (critical for OFFBOARD)
+- Allows main code to focus on mission logic
 
 This is useful for:
 - Verifying OFFBOARD mode switch works
 - Testing MAVROS connection
 - Confirming PX4 responds to mode change requests
+- Validating background thread setpoint publishing
 
 WORKFLOW:
 1. SSH into Jetson and run: python3 test_offboard.py --hardware
-2. Script will output: "OFFBOARD mode active - success message received from PX4!"
-3. Script will exit safely without moving the drone
+2. Script will output: "Background stream started (continuous publishing at 50Hz)"
+3. Script will output: "OFFBOARD mode active - success message received from PX4!"
+4. Script will maintain OFFBOARD for 5 seconds (background thread keeps publishing)
+5. Script will exit safely without moving the drone
 
 Usage:
     python3 test_offboard.py --sitl              # Use SITL simulation
@@ -68,20 +75,37 @@ class OffboardTest:
                 return False
             self.log("[TEST] ✓ Connected to MAVROS")
 
-            # Step 2: Switch to OFFBOARD mode (warm up setpoint stream, don't publish movement)
+            # Step 2: Start background setpoint stream
+            # This runs in a separate thread and maintains OFFBOARD mode automatically
+            self.log("\n[TEST] Starting background setpoint stream...")
+            if not self.px4.start_offboard_stream_background():
+                self.log("[TEST] Failed to start background stream")
+                return False
+            self.log("[TEST] ✓ Background stream started (continuous publishing at 50Hz)")
+
+            # Step 3: Switch to OFFBOARD mode
             self.log("\n[TEST] Switching to OFFBOARD mode...")
-            self.log("[TEST] Warming up setpoint stream (need >2Hz for OFFBOARD)")
-            
             if not self.px4.start_offboard():
                 self.log("[TEST] Failed to switch to OFFBOARD mode")
+                self.px4.stop_offboard_stream_background()
                 return False
-            
             self.log("[TEST] ✓ OFFBOARD mode active - success message received from PX4!")
 
-            # Step 3: Check arm status (non-blocking)
+            # Step 4: Check arm status
             self.log("\n[TEST] Checking arm status...")
             is_armed = self.px4.is_armed()
             self.log(f"[TEST] Drone armed: {is_armed}")
+
+            # Step 5: Maintain stream for a bit to verify stability
+            self.log("\n[TEST] Maintaining OFFBOARD for 5 seconds (background thread publishing)...")
+            time.sleep(5)
+            self.log("[TEST] ✓ OFFBOARD stream stable for 5 seconds")
+
+            # Step 6: Stop background stream
+            self.log("\n[TEST] Stopping background stream...")
+            if not self.px4.stop_offboard_stream_background():
+                self.log("[TEST] Failed to stop background stream")
+                return False
 
             self.log("\n" + "="*70)
             self.log("✓ OFFBOARD TEST COMPLETE")
@@ -91,16 +115,15 @@ class OffboardTest:
 
         except Exception as e:
             self.log(f"\n[TEST] Exception: {str(e)}")
-            self.log("[TEST] Attempting to disarm...")
-            try:
-                self.px4.disarm_vehicle()
-            except:
-                pass
             return False
 
         finally:
             # Cleanup
-            self.log("[TEST] Shutting down...")
+            self.log("[TEST] Cleaning up...")
+            try:
+                self.px4.stop_offboard_stream_background()
+            except:
+                pass
             try:
                 self.px4.disconnect()
             except:

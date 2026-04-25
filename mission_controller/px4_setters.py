@@ -15,6 +15,7 @@ It assumes the main interface object already created:
 
 import time
 import rclpy
+import threading
 from geometry_msgs.msg import PoseStamped, TwistStamped
 from mavros_msgs.srv import CommandBool, SetMode, CommandTOL
 
@@ -35,6 +36,12 @@ class PX4Setters:
     - get_clock()
     - is_armed()
     """
+
+    def __init__(self):
+        """Initialize threads and state"""
+        self._stream_thread = None
+        self._stream_running = False
+        self._stream_lock = threading.Lock()
 
     def arm_vehicle(self, timeout=20):
         """
@@ -129,28 +136,12 @@ class PX4Setters:
 
             start = time.time()
             while not future.done() and (time.time() - start) < timeout:
-                rclpy.spin_once(self, timeout_sec=0.1)
-                time.sleep(0.1)
-
-            if future.done() and future.result() and future.result().mode_sent:
-                print(f"[PX4] Mode changed to {mode_name}")
-                return True
-            else:
-                print("[PX4] Mode change failed")
-                return False
-        except Exception as e:
-            print(f"[PX4] Mode change failed: {str(e)}")
-            return False
-
-    def takeoff(self, altitude, timeout=60):
-        """
-        Perform takeoff to specified altitude
-
-        Args:
-            altitude: Target altitude in meters
-            timeout: Timeout in seconds
-        """
-        if not self.connected:
+                # CRITICAL: Keep publishing setpoints during mode change
+                # PX4 OFFBOARD mode requires continuous setpoint stream (>2Hz)
+                # If we stop publishing, PX4 may reject the mode change
+                if mode_name == "OFFBOARD":
+                    self.send_velocity_setpoint(0.0, 0.0, 0.0, 0.0)
+                
             print("[PX4] Not connected to MAVROS, cannot takeoff")
             return False
 
@@ -352,6 +343,159 @@ class PX4Setters:
             time.sleep(warmup_dt)
 
         return self.change_mode("OFFBOARD")
+
+    def maintain_offboard_stream(self, get_velocity=None, duration=None, rate_hz=50):
+        """
+        Maintain OFFBOARD mode by continuously publishing velocity setpoints.
+
+        CRITICAL: Once in OFFBOARD mode, you MUST call this (or another continuous
+        publishing function) to keep setpoints flowing at >2Hz. If publishing stops,
+        PX4 will timeout OFFBOARD and switch to failsafe mode.
+
+        Args:
+            get_velocity: Callable that returns (vx, vy, vz, yaw_rate) tuple.
+                         If None, publishes zero velocity (hover/stay in place).
+                         Example: lambda: (1.0, 0.0, 0.0, 0.0) for forward motion
+            duration: Duration to maintain stream in seconds. If None, runs until
+                     interrupted (KeyboardInterrupt) or exception.
+            rate_hz: Publishing frequency in Hz (default 50 = 20ms interval)
+
+        Returns:
+            True if completed normally, False if error occurred
+
+        Usage Examples:
+            # Hover in place for 5 seconds
+            px4.maintain_offboard_stream(duration=5.0)
+
+            # Fly forward at 1 m/s until interrupted
+            px4.maintain_offboard_stream(get_velocity=lambda: (1.0, 0.0, 0.0, 0.0))
+
+            # Fly forward for 10 seconds
+            px4.maintain_offboard_stream(
+                get_velocity=lambda: (1.0, 0.0, 0.0, 0.0),
+                duration=10.0
+            )
+        """
+        if not self.connected:
+            print("[PX4] Not connected, cannot maintain OFFBOARD stream")
+            return False
+
+        if get_velocity is None:
+            get_velocity = lambda: (0.0, 0.0, 0.0, 0.0)  # Default: hover
+
+        dt = 1.0 / rate_hz
+        start = time.time()
+
+        try:
+            while True:
+                # Check duration limit
+                if duration and (time.time() - start) > duration:
+                    return True
+
+                # Get velocity from user function
+                vx, vy, vz, yaw_rate = get_velocity()
+                
+                # Publish setpoint
+                self.send_velocity_setpoint(vx, vy, vz, yaw_rate)
+                rclpy.spin_once(self, timeout_sec=0.0)
+                time.sleep(dt)
+
+        except KeyboardInterrupt:
+            print("[PX4] Stream interrupted by user")
+            return True
+        except Exception as e:
+            print(f"[PX4] Error maintaining OFFBOARD stream: {str(e)}")
+            return False
+
+    def start_offboard_stream_background(self, rate_hz=50):
+        """
+        Start a background thread that continuously publishes zero velocity setpoints.
+
+        CRITICAL: OFFBOARD mode requires continuous setpoint publishing (>2Hz).
+        This method starts a thread that handles that automatically in the background,
+        allowing your main code to be simple and not worry about the publishing loop.
+
+        Args:
+            rate_hz: Publishing frequency in Hz (default 50 = 20ms interval)
+
+        Returns:
+            True if thread started successfully, False if already running
+
+        Usage:
+            # Start background thread
+            px4.start_offboard_stream_background()
+
+            # Now you can just switch to OFFBOARD mode
+            px4.start_offboard()
+
+            # Do whatever you want - thread keeps publishing setpoints in background
+            time.sleep(5)
+            px4.fly_forward(1.0, 10)
+            px4.fly_backward(1.0, 10)
+
+            # Stop the thread when done
+            px4.stop_offboard_stream_background()
+        """
+        with self._stream_lock:
+            if self._stream_running:
+                print("[PX4] Setpoint stream already running")
+                return False
+
+            self._stream_running = True
+            self._stream_thread = threading.Thread(
+                target=self._offboard_stream_worker,
+                args=(rate_hz,),
+                daemon=False
+            )
+            self._stream_thread.start()
+            print("[PX4] ✓ Background setpoint stream started")
+            return True
+
+    def stop_offboard_stream_background(self, timeout=5):
+        """
+        Stop the background setpoint publishing thread.
+
+        Args:
+            timeout: Timeout in seconds to wait for thread to stop
+
+        Returns:
+            True if stopped successfully, False if error or timeout
+        """
+        with self._stream_lock:
+            if not self._stream_running:
+                print("[PX4] Setpoint stream not running")
+                return True
+
+            self._stream_running = False
+
+        if self._stream_thread:
+            self._stream_thread.join(timeout=timeout)
+            if self._stream_thread.is_alive():
+                print("[PX4] [WARN] Background thread did not stop within timeout")
+                return False
+
+        self._stream_thread = None
+        print("[PX4] ✓ Background setpoint stream stopped")
+        return True
+
+    def _offboard_stream_worker(self, rate_hz):
+        """
+        Worker thread function that continuously publishes zero velocity setpoints.
+
+        This runs in the background and keeps OFFBOARD mode alive.
+        """
+        dt = 1.0 / rate_hz
+
+        try:
+            while self._stream_running:
+                # Publish zero velocity (hover)
+                self.send_velocity_setpoint(0.0, 0.0, 0.0, 0.0)
+                rclpy.spin_once(self, timeout_sec=0.0)
+                time.sleep(dt)
+        except Exception as e:
+            print(f"[PX4] Background stream worker error: {str(e)}")
+            with self._stream_lock:
+                self._stream_running = False
 
     def set_rc_channel(self, channel, pwm_value, timeout=30):
         """
