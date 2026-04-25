@@ -129,6 +129,14 @@ class PX4Setters:
             print("[PX4] Not connected to MAVROS, cannot change mode")
             return False
 
+        # Check if service is available
+        print(f"[PX4] Checking if set_mode service is available...")
+        if not self.set_mode_client.wait_for_service(timeout_sec=5):
+            print("[PX4] Service /set_mode NOT available after 5 seconds")
+            print("[PX4] Make sure MAVROS is running: ros2 launch mavros px4.launch fcu_url:=...")
+            return False
+        print("[PX4] ✓ Service is available")
+
         print(f"[PX4] Changing mode to {mode_name}...")
         try:
             # this message type is just to set mode
