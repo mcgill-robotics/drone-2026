@@ -43,6 +43,7 @@ class PX4Setters:
         self._stream_running = False
         self._stream_lock = threading.Lock()
         self._desired_velocity = [0.0, 0.0, 0.0, 0.0]  # vx, vy, vz, yaw_rate
+        self._velocity_lock = threading.Lock()
         
         # Call parent class __init__ (PX4Getters -> Node)
         super().__init__(**kwargs)
