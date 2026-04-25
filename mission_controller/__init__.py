@@ -4,8 +4,8 @@ This file allows simpler import rules, converting the folder into packageable co
 example: instead of writing "from mission_controller.controller import MissionController", you can write 
 "from mission_controller import MissionController". This is ONLY for external package users.
 """
-# ArduPilot Interface
-from .ardupilot_interface import ArduPilotInterface, init_autopilot, get_autopilot
+# PX4 Interface
+from .ardupilot_interface import PX4Interface, init_px4, get_px4, init_autopilot, get_autopilot
 
 # Core types
 from .types import MissionState, Mode, Point
@@ -39,8 +39,8 @@ __version__ = "1.0.0"
 this prevents the import of everything that was defined in the file,, ie types, objectives...
 """
 __all__ = [
-    # ArduPilot Interface
-    "ArduPilotInterface", "init_autopilot", "get_autopilot",
+    # PX4 Interface
+    "PX4Interface", "init_px4", "get_px4", "init_autopilot", "get_autopilot",
     
     # Types
     "MissionState", "Mode", "Point",

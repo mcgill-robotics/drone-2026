@@ -8,13 +8,26 @@ class MissionState(Enum):
     """Enumeration of all possible mission states"""
     INIT = auto()
     TAKEOFF = auto()
+    # Mission One states
     LAPS = auto()
     TRANSIT_TO_SITE = auto()
     SEARCH_SITE = auto()
     DROP_PAYLOAD = auto()
+    # Mission Two states
+    ENTER_BUILDING = auto()
+    SEARCH_BUILDING = auto()
+    SPRAY_PADS = auto()
+    EXIT_BUILDING = auto()
+    # Common end states
     RETURN_HOME = auto()
     LAND = auto()
     COMPLETE = auto()
+
+
+class MissionType(Enum):
+    """Enumeration of available mission types"""
+    MISSION_ONE = auto()  # Lap-based outdoor mission with drop payload
+    MISSION_TWO = auto()  # Building entry/search/spray mission
 
 
 class Mode(Enum):
