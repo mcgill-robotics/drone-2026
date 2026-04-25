@@ -328,7 +328,7 @@ class PX4Getters(Node):
 
         self.param_set_client = self.create_client(ParamSet, f"/{namespace}/param/set")
         self.arming_client = self.create_client(CommandBool, f"/{namespace}/cmd/arming")
-        self.set_mode_client = self.create_client(SetMode, f"/{namespace}/cmd/set_mode")
+        self.set_mode_client = self.create_client(SetMode, f"/{namespace}/set_mode")
         self.takeoff_client = self.create_client(CommandTOL, f"/{namespace}/cmd/takeoff")
         self.land_client = self.create_client(CommandTOL, f"/{namespace}/cmd/land")
         self.home_client = self.create_client(CommandHome, f"/{namespace}/cmd/set_home")
