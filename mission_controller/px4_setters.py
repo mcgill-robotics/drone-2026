@@ -42,6 +42,7 @@ class PX4Setters:
         self._stream_thread = None
         self._stream_running = False
         self._stream_lock = threading.Lock()
+        self._desired_velocity = [0.0, 0.0, 0.0, 0.0]  # vx, vy, vz, yaw_rate
         
         # Call parent class __init__ (PX4Getters -> Node)
         super().__init__(**kwargs)
@@ -336,23 +337,39 @@ class PX4Setters:
 
     def send_velocity_setpoint(self, vx, vy, vz, yaw_rate=0.0):
         """
-        Publish a local velocity setpoint.
+        Update the desired velocity setpoint.
+
+        When background stream is running, this updates the velocity that the
+        background thread will continuously publish. Otherwise, this publishes
+        immediately.
 
         IMPORTANT:
         PX4 generally requires continuous setpoint publishing (>2 Hz)
         when operating in OFFBOARD mode.
         """
         try:
-            msg = TwistStamped()
-            msg.header.stamp = self.get_clock().now().to_msg()
-            msg.twist.linear.x = float(vx)
-            msg.twist.linear.y = float(vy)
-            msg.twist.linear.z = float(vz)
-            msg.twist.angular.z = float(yaw_rate)
-            self.velocity_setpoint_pub.publish(msg)
+            vx_f = float(vx)
+            vy_f = float(vy)
+            vz_f = float(vz)
+            yaw_f = float(yaw_rate)
+            
+            # Update desired velocity (used by background stream if running)
+            with self._velocity_lock:
+                self._desired_velocity = [vx_f, vy_f, vz_f, yaw_f]
+            
+            # If stream is not running, publish immediately (for compatibility)
+            if not self._stream_running:
+                msg = TwistStamped()
+                msg.header.stamp = self.get_clock().now().to_msg()
+                msg.twist.linear.x = vx_f
+                msg.twist.linear.y = vy_f
+                msg.twist.linear.z = vz_f
+                msg.twist.angular.z = yaw_f
+                self.velocity_setpoint_pub.publish(msg)
+            
             return True
         except Exception as e:
-            print(f"[PX4][ERROR] Failed to publish velocity setpoint: {str(e)}")
+            print(f"[PX4][ERROR] Failed to set velocity setpoint: {str(e)}")
             return False
 
     # =========================================================
@@ -527,9 +544,10 @@ class PX4Setters:
 
     def _offboard_stream_worker(self, rate_hz):
         """
-        Worker thread function that continuously publishes zero velocity setpoints.
+        Worker thread function that continuously publishes the current desired velocity setpoint.
 
-        This runs in the background and keeps OFFBOARD mode alive.
+        This runs in the background and keeps OFFBOARD mode alive by publishing
+        whatever velocity the user has set via send_velocity_setpoint().
         """
         dt = 1.0 / rate_hz
         publish_count = 0
@@ -537,8 +555,19 @@ class PX4Setters:
 
         try:
             while self._stream_running:
-                # Publish zero velocity (hover)
-                self.send_velocity_setpoint(0.0, 0.0, 0.0, 0.0)
+                # Read current desired velocity (thread-safe)
+                with self._velocity_lock:
+                    vx, vy, vz, yaw = self._desired_velocity
+                
+                # Publish current desired velocity
+                msg = TwistStamped()
+                msg.header.stamp = self.get_clock().now().to_msg()
+                msg.twist.linear.x = vx
+                msg.twist.linear.y = vy
+                msg.twist.linear.z = vz
+                msg.twist.angular.z = yaw
+                self.velocity_setpoint_pub.publish(msg)
+                
                 publish_count += 1
                 
                 # Log progress every 5 seconds
