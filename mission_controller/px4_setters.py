@@ -510,11 +510,19 @@ class PX4Setters:
         This runs in the background and keeps OFFBOARD mode alive.
         """
         dt = 1.0 / rate_hz
+        publish_count = 0
+        log_interval = int(5 * rate_hz)  # Log every 5 seconds at specified rate
 
         try:
             while self._stream_running:
                 # Publish zero velocity (hover)
                 self.send_velocity_setpoint(0.0, 0.0, 0.0, 0.0)
+                publish_count += 1
+                
+                # Log progress every 5 seconds
+                if publish_count % log_interval == 0:
+                    print(f"[PX4] Background stream alive - published {publish_count} setpoints")
+                
                 time.sleep(dt)
         except Exception as e:
             print(f"[PX4] Background stream worker error: {str(e)}")
