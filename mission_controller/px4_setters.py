@@ -515,8 +515,6 @@ class PX4Setters:
             while self._stream_running:
                 # Publish zero velocity (hover)
                 self.send_velocity_setpoint(0.0, 0.0, 0.0, 0.0)
-                print("[PX4] Background stream: Published zero velocity setpoint")
-                rclpy.spin_once(self, timeout_sec=0.0)
                 time.sleep(dt)
         except Exception as e:
             print(f"[PX4] Background stream worker error: {str(e)}")
