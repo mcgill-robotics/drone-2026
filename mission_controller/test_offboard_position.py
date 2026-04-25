@@ -67,14 +67,25 @@ class OffboardPositionTest:
                 return False
             self.log("[TEST] ✓ OFFBOARD mode active")
 
-            # Step 4: Arm the vehicle
-            self.log("\n[TEST] Arming vehicle...")
-            if not self.px4.arm_vehicle():
-                self.log("[TEST] Failed to arm vehicle")
+            # Step 4: Wait for manual arming (1 minute timeout)
+            self.log("\n[TEST] Waiting for manual arm command (60 seconds)...")
+            self.log("[TEST] Please arm the vehicle manually within 60 seconds")
+            
+            arm_timeout = 60
+            start_time = time.time()
+            while (time.time() - start_time) < arm_timeout:
+                if self.px4.is_armed():
+                    self.log(f"[TEST] ✓ Vehicle armed!")
+                    break
+                remaining = int(arm_timeout - (time.time() - start_time))
+                if remaining % 10 == 0:
+                    self.log(f"[TEST] Waiting... {remaining} seconds remaining")
+                time.sleep(1)
+            else:
+                self.log("[TEST] Arming timeout - vehicle was not armed within 60 seconds")
                 self.px4.stop_offboard_stream_background()
                 return False
-            self.log("[TEST] ✓ Vehicle armed")
-
+            time.sleep(8)
             # Step 5: Send position setpoint (move to 0, 0, -5m like C++ example)
             # In our velocity-based system, we'll fly upward at 1 m/s for 5 seconds
             self.log("\n[TEST] Sending upward velocity command (1 m/s up)...")
