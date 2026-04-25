@@ -142,6 +142,28 @@ class PX4Setters:
                 if mode_name == "OFFBOARD":
                     self.send_velocity_setpoint(0.0, 0.0, 0.0, 0.0)
                 
+                rclpy.spin_once(self, timeout_sec=0.1)
+                time.sleep(0.1)
+
+            if future.done() and future.result() and future.result().mode_sent:
+                print(f"[PX4] Mode changed to {mode_name}")
+                return True
+            else:
+                print("[PX4] Mode change failed")
+                return False
+        except Exception as e:
+            print(f"[PX4] Mode change failed: {str(e)}")
+            return False
+
+    def takeoff(self, altitude, timeout=60):
+        """
+        Perform takeoff to specified altitude
+
+        Args:
+            altitude: Target altitude in meters
+            timeout: Timeout in seconds
+        """
+        if not self.connected:
             print("[PX4] Not connected to MAVROS, cannot takeoff")
             return False
 
