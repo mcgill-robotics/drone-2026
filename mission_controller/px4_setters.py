@@ -37,11 +37,14 @@ class PX4Setters:
     - is_armed()
     """
 
-    def __init__(self):
-        """Initialize threads and state"""
+    def __init__(self, **kwargs):
+        """Initialize threads and state, then pass control to parent class"""
         self._stream_thread = None
         self._stream_running = False
         self._stream_lock = threading.Lock()
+        
+        # Call parent class __init__ (PX4Getters -> Node)
+        super().__init__(**kwargs)
 
     def arm_vehicle(self, timeout=20):
         """
