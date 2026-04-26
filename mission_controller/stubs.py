@@ -1,14 +1,14 @@
 """
 Stub functions for mission controller implementations
-These functions interface with ArduPilot autopilot system via pymavlink
+These functions interface with PX4 autopilot system via MAVROS
 """
 
-from .ardupilot_interface import get_autopilot
+from .px4_interface import get_px4
 
 
 def takeoff_drone(altitude=50):
     """
-    Execute drone takeoff sequence using ArduPilot
+    Execute drone takeoff sequence using PX4
     
     Args:
         altitude: Target altitude in meters (default 50m)
@@ -16,34 +16,34 @@ def takeoff_drone(altitude=50):
     Returns:
         True if successful, False otherwise
     """
-    autopilot = get_autopilot()
+    autopilot = get_px4()
     if not autopilot:
         print("  [ERROR] Autopilot not initialized")
         return False
     
-    print(f"  [ARDUPILOT] takeoff_drone() - Taking off to {altitude}m")
+    print(f"  [PX4] takeoff_drone() - Taking off to {altitude}m")
     return autopilot.takeoff(altitude, timeout=60)
 
 
 def land_drone():
     """
-    Execute drone landing sequence using ArduPilot
+    Execute drone landing sequence using PX4
     
     Returns:
         True if successful, False otherwise
     """
-    autopilot = get_autopilot()
+    autopilot = get_px4()
     if not autopilot:
         print("  [ERROR] Autopilot not initialized")
         return False
     
-    print("  [ARDUPILOT] land_drone() - Landing")
+    print("  [PX4] land_drone() - Landing")
     return autopilot.land(timeout=60)
 
 
 def goto_drone(target):
     """
-    Navigate drone to target GPS position using ArduPilot
+    Navigate drone to target GPS position using PX4
     
     Args:
         target: Point object or dict with lat, lon, alt keys
@@ -51,7 +51,7 @@ def goto_drone(target):
     Returns:
         True if navigation command sent successfully
     """
-    autopilot = get_autopilot()
+    autopilot = get_px4()
     if not autopilot:
         print("  [ERROR] Autopilot not initialized")
         return False
@@ -65,7 +65,7 @@ def goto_drone(target):
         print(f"  [ERROR] Invalid target format: {target}")
         return False
     
-    print(f"  [ARDUPILOT] goto_drone() - Navigating to ({lat:.6f}, {lon:.6f}, {alt}m)")
+    print(f"  [PX4] goto_drone() - Navigating to ({lat:.6f}, {lon:.6f}, {alt}m)")
     return autopilot.goto_location(lat, lon, alt, timeout=60)
 
 
@@ -100,12 +100,12 @@ def boustrophedon_search(start, search_area_size=100, altitude=50):
         
     NOTE: This requires vision processing to detect landing pad markers
     """
-    autopilot = get_autopilot()
+    autopilot = get_px4()
     if not autopilot:
         print("  [ERROR] Autopilot not initialized")
         return None
     
-    print(f"  [ARDUPILOT] boustrophedon_search() - Starting search pattern at {start}")
+    print(f"  [PX4] boustrophedon_search() - Starting search pattern at {start}")
     print("  [TODO] Integrate vision processing to detect landing pad")
     
     # This would need computer vision integration
@@ -124,7 +124,7 @@ def at_position(target, tolerance=5.0):
     Returns:
         True if drone is within tolerance of target, False otherwise
     """
-    autopilot = get_autopilot()
+    autopilot = get_px4()
     if not autopilot:
         return False
     
@@ -175,12 +175,12 @@ def drop_payload(target):
         
     NOTE: This requires hardware integration (servo/relay control)
     """
-    autopilot = get_autopilot()
+    autopilot = get_px4()
     if not autopilot:
         print("  [ERROR] Autopilot not initialized")
         return False
     
-    print(f"  [ARDUPILOT] drop_payload() - Dropping payload at {target}")
+    print(f"  [PX4] drop_payload() - Dropping payload at {target}")
     print("  [TODO] Integrate servo/relay control for payload release")
     print("  [HINT] Use set_rc_channel() to trigger servo (typically channel 8 or via MAV_CMD_DO_SET_SERVO)")
     
@@ -233,12 +233,12 @@ def extinguish_fire(location):
         
     NOTE: This requires a spray/extinguisher mechanism (liquid valve control)
     """
-    autopilot = get_autopilot()
+    autopilot = get_px4()
     if not autopilot:
         print("  [ERROR] Autopilot not initialized")
         return False
     
-    print(f"  [ARDUPILOT] extinguish_fire() - Extinguishing fire at {location}")
+    print(f"  [PX4] extinguish_fire() - Extinguishing fire at {location}")
     print("  [TODO] Integrate spray mechanism (solenoid valve or pump control)")
     print("  [HINT] Use set_rc_channel() or servo control to activate sprayer")
     
@@ -262,11 +262,11 @@ def take_survey_photos(location):
         
     NOTE: This requires camera integration (typically via MAVLink camera control)
     """
-    autopilot = get_autopilot()
+    autopilot = get_px4()
     if not autopilot:
         return 0
     
-    print(f"  [ARDUPILOT] take_survey_photos() - Taking photos at {location}")
+    print(f"  [PX4] take_survey_photos() - Taking photos at {location}")
     print("  [TODO] Integrate camera control (MAVLink CAM_TRIGG_DIST or direct camera API)")
     
     # This would typically use:
@@ -288,7 +288,7 @@ def release_payload(location):
         
     NOTE: This is similar to drop_payload and requires hardware integration
     """
-    print(f"  [ARDUPILOT] release_payload() - Releasing payload at {location}")
+    print(f"  [PX4] release_payload() - Releasing payload at {location}")
     return drop_payload(location)
 
 
