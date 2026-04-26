@@ -42,8 +42,7 @@ class PX4Setters:
         self._stream_thread = None
         self._stream_running = False
         self._stream_lock = threading.Lock()
-        self._desired_velocity = [0.0, 0.0, 0.0, 0.0]  # vx, vy, vz, yaw_rate
-        self._velocity_lock = threading.Lock()
+        self._last_user_publish_time = 0  # Track when user last published a command
         
         # Call parent class __init__ (PX4Getters -> Node)
         super().__init__(**kwargs)
@@ -338,15 +337,16 @@ class PX4Setters:
 
     def send_velocity_setpoint(self, vx, vy, vz, yaw_rate=0.0):
         """
-        Update the desired velocity setpoint.
+        Publish a velocity setpoint immediately.
 
-        When background stream is running, this updates the velocity that the
-        background thread will continuously publish. Otherwise, this publishes
-        immediately.
+        When background heartbeat is running, this publishes your desired velocity
+        on-demand without interference from the heartbeat. The heartbeat only publishes
+        if no user command has been sent recently.
 
         IMPORTANT:
-        PX4 generally requires continuous setpoint publishing (>2 Hz)
-        when operating in OFFBOARD mode.
+        - Call this as often as you need - it won't be overwritten by the heartbeat
+        - The heartbeat publishes zero velocity only when user isn't actively commanding
+        - For continuous movement, keep calling this at your desired rate
         """
         try:
             vx_f = float(vx)
@@ -354,25 +354,27 @@ class PX4Setters:
             vz_f = float(vz)
             yaw_f = float(yaw_rate)
             
-            # Update desired velocity (used by background stream if running)
-            with self._velocity_lock:
-                self._desired_velocity = [vx_f, vy_f, vz_f, yaw_f]
+            # Record that user just published (heartbeat will skip if recent)
+            self._last_user_publish_time = time.time()
             
-            # If stream is not running, publish immediately (for compatibility)
-            if not self._stream_running:
-                msg = TwistStamped()
-                msg.header.stamp = self.get_clock().now().to_msg()
-                msg.twist.linear.x = vx_f
-                msg.twist.linear.y = vy_f
-                msg.twist.linear.z = vz_f
-                msg.twist.angular.z = yaw_f
-                self.velocity_setpoint_pub.publish(msg)
+            msg = TwistStamped()
+            msg.header.stamp = self.get_clock().now().to_msg()
+            msg.twist.linear.x = vx_f
+            msg.twist.linear.y = vy_f
+            msg.twist.linear.z = vz_f
+            msg.twist.angular.z = yaw_f
+            self.velocity_setpoint_pub.publish(msg)
             
             return True
         except Exception as e:
             print(f"[PX4][ERROR] Failed to set velocity setpoint: {str(e)}")
             return False
 
+    def send_velocity_setpoint_gps(self, lat, lon, alt, yaw_rate=0.0):
+        """
+        Update the desired velocity setpoint in GPS coordinates. This will make traveling algs easier
+        we cannot run this in the second mission, as there isnt consistent access to the GPS
+        """
     # =========================================================
     # High-level helpers built on top of setters
     # =========================================================
@@ -472,16 +474,16 @@ class PX4Setters:
             print(f"[PX4] Error maintaining OFFBOARD stream: {str(e)}")
             return False
 
-    def start_offboard_stream_background(self, rate_hz=50):
+    def start_offboard_stream_background(self, rate_hz=10):
         """
-        Start a background thread that continuously publishes zero velocity setpoints.
+        Start a background thread that continuously publishes a heartbeat message.
 
-        CRITICAL: OFFBOARD mode requires continuous setpoint publishing (>2Hz).
-        This method starts a thread that handles that automatically in the background,
-        allowing your main code to be simple and not worry about the publishing loop.
+        CRITICAL: OFFBOARD mode requires continuous message publishing (>2Hz).
+        This method starts a lightweight heartbeat thread in the background,
+        allowing setpoint publishing to be independent and only occur on-demand.
 
         Args:
-            rate_hz: Publishing frequency in Hz (default 50 = 20ms interval)
+            rate_hz: Heartbeat frequency in Hz (default 10 = 100ms interval)
 
         Returns:
             True if thread started successfully, False if already running
@@ -493,32 +495,32 @@ class PX4Setters:
             # Now you can just switch to OFFBOARD mode
             px4.start_offboard()
 
-            # Do whatever you want - thread keeps publishing setpoints in background
+            # Do whatever you want - thread keeps heartbeat alive in background
             time.sleep(5)
-            px4.fly_forward(1.0, 10)
-            px4.fly_backward(1.0, 10)
+            px4.send_velocity_setpoint(1.0, 0.0, 0.0)
+            px4.send_velocity_setpoint(0.0, 0.0, 0.0)
 
             # Stop the thread when done
             px4.stop_offboard_stream_background()
         """
         with self._stream_lock:
             if self._stream_running:
-                print("[PX4] Setpoint stream already running")
+                print("[PX4] Heartbeat stream already running")
                 return False
 
             self._stream_running = True
             self._stream_thread = threading.Thread(
-                target=self._offboard_stream_worker,
+                target=self._heartbeat_worker,
                 args=(rate_hz,),
                 daemon=False
             )
             self._stream_thread.start()
-            print("[PX4] ✓ Background setpoint stream started")
+            print("[PX4] ✓ Background heartbeat stream started")
             return True
 
     def stop_offboard_stream_background(self, timeout=5):
         """
-        Stop the background setpoint publishing thread.
+        Stop the background heartbeat publishing thread.
 
         Args:
             timeout: Timeout in seconds to wait for thread to stop
@@ -528,7 +530,7 @@ class PX4Setters:
         """
         with self._stream_lock:
             if not self._stream_running:
-                print("[PX4] Setpoint stream not running")
+                print("[PX4] Heartbeat stream not running")
                 return True
 
             self._stream_running = False
@@ -540,15 +542,22 @@ class PX4Setters:
                 return False
 
         self._stream_thread = None
-        print("[PX4] ✓ Background setpoint stream stopped")
+        print("[PX4] ✓ Background heartbeat stream stopped")
         return True
 
-    def _offboard_stream_worker(self, rate_hz):
+    def _heartbeat_worker(self, rate_hz):
         """
-        Worker thread function that continuously publishes the current desired velocity setpoint.
+        Worker thread function that publishes a lightweight heartbeat message.
 
         This runs in the background and keeps OFFBOARD mode alive by publishing
-        whatever velocity the user has set via send_velocity_setpoint().
+        zero velocity setpoints. However, it SKIPS publishing if the user has
+        published a command recently (within the last heartbeat interval).
+
+        This prevents the heartbeat from overwriting user commands.
+        
+        The heartbeat publishes at a low frequency (default 10Hz) to keep PX4
+        aware the system is alive, while allowing user commands to take effect
+        without interference.
         """
         dt = 1.0 / rate_hz
         publish_count = 0
@@ -556,28 +565,29 @@ class PX4Setters:
 
         try:
             while self._stream_running:
-                # Read current desired velocity (thread-safe)
-                with self._velocity_lock:
-                    vx, vy, vz, yaw = self._desired_velocity
+                # Check if user published recently (within last heartbeat interval)
+                time_since_user_publish = time.time() - self._last_user_publish_time
                 
-                # Publish current desired velocity
-                msg = TwistStamped()
-                msg.header.stamp = self.get_clock().now().to_msg()
-                msg.twist.linear.x = vx
-                msg.twist.linear.y = vy
-                msg.twist.linear.z = vz
-                msg.twist.angular.z = yaw
-                self.velocity_setpoint_pub.publish(msg)
-                
-                publish_count += 1
-                
-                # Log progress every 5 seconds
-                if publish_count % log_interval == 0:
-                    print(f"[PX4] Background stream alive - published {publish_count} setpoints")
+                # Only publish heartbeat if user hasn't published recently
+                # This prevents heartbeat from overwriting user commands
+                if time_since_user_publish > dt:
+                    msg = TwistStamped()
+                    msg.header.stamp = self.get_clock().now().to_msg()
+                    msg.twist.linear.x = 0.0
+                    msg.twist.linear.y = 0.0
+                    msg.twist.linear.z = 0.0
+                    msg.twist.angular.z = 0.0
+                    self.velocity_setpoint_pub.publish(msg)
+                    
+                    publish_count += 1
+                    
+                    # Log progress every 5 seconds
+                    if publish_count % log_interval == 0:
+                        print(f"[PX4] Heartbeat alive - published {publish_count} messages")
                 
                 time.sleep(dt)
         except Exception as e:
-            print(f"[PX4] Background stream worker error: {str(e)}")
+            print(f"[PX4] Heartbeat worker error: {str(e)}")
             with self._stream_lock:
                 self._stream_running = False
 
