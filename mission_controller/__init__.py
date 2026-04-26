@@ -1,11 +1,10 @@
-
 """
 This file allows simpler import rules, converting the folder into packageable code.
 example: instead of writing "from mission_controller.controller import MissionController", you can write 
 "from mission_controller import MissionController". This is ONLY for external package users.
 """
 # PX4 Interface
-from .ardupilot_interface import PX4Interface, init_px4, get_px4, init_autopilot, get_autopilot
+from .px4_interface import PX4Interface, init_px4, get_px4
 
 # Core types
 from .types import MissionState, Mode, Point
@@ -40,7 +39,7 @@ this prevents the import of everything that was defined in the file,, ie types, 
 """
 __all__ = [
     # PX4 Interface
-    "PX4Interface", "init_px4", "get_px4", "init_autopilot", "get_autopilot",
+    "PX4Interface", "init_px4", "get_px4",
     
     # Types
     "MissionState", "Mode", "Point",

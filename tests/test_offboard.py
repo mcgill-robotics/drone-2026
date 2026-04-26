@@ -38,7 +38,7 @@ Usage:
 import rclpy
 import time
 import argparse
-from px4_interface import init_px4, boot_px4, stop_px4
+from mission_controller.px4_interface import init_px4, boot_px4, stop_px4
 
 
 class OffboardTest:

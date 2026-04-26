@@ -17,7 +17,7 @@ Run this and monitor topics in another terminal:
 import rclpy
 import time
 import argparse
-from px4_interface import init_px4, boot_px4, stop_px4
+from mission_controller.px4_interface import init_px4, boot_px4, stop_px4
 
 
 def test_commands(px4):
