@@ -12,6 +12,12 @@ This script demonstrates position-based offboard control:
 This is similar to the C++ example but adapted for MAVROS/velocity setpoints.
 """
 
+import sys
+import os
+
+# Add parent directory to path so mission_controller can be imported
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+
 import rclpy
 import time
 import argparse

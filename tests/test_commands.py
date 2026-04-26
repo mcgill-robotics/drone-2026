@@ -14,6 +14,12 @@ Run this and monitor topics in another terminal:
   ros2 topic echo /mavros/setpoint_raw/local_position
 """
 
+import sys
+import os
+
+# Add parent directory to path so mission_controller can be imported
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+
 import rclpy
 import time
 import argparse

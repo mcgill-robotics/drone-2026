@@ -35,6 +35,12 @@ Usage:
     python3 test_offboard.py --port /dev/ttyUSB0 # Custom port
 """
 
+import sys
+import os
+
+# Add parent directory to path so mission_controller can be imported
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+
 import rclpy
 import time
 import argparse

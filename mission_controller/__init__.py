@@ -4,7 +4,7 @@ example: instead of writing "from mission_controller.controller import MissionCo
 "from mission_controller import MissionController". This is ONLY for external package users.
 """
 # PX4 Interface
-from .px4_interface import PX4Interface, init_px4, get_px4
+from .px4_interface import PX4Interface, init_px4, boot_px4, stop_px4, get_px4
 
 # Core types
 from .types import MissionState, Mode, Point
@@ -39,7 +39,7 @@ this prevents the import of everything that was defined in the file,, ie types, 
 """
 __all__ = [
     # PX4 Interface
-    "PX4Interface", "init_px4", "get_px4",
+    "PX4Interface", "init_px4", "boot_px4", "stop_px4", "get_px4",
     
     # Types
     "MissionState", "Mode", "Point",
