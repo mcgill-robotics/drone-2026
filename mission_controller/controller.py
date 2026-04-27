@@ -5,14 +5,16 @@ Core logic for managing drone mission execution
 import time
 from .types import MissionState, Mode, MissionType
 from .strategies import MissionOne, MissionTwo
+from .px4_interface import get_px4
 from .stubs import (
-    takeoff_drone, land_drone, goto_drone, boustrophedon_search,
+    goto_drone, boustrophedon_search,
     at_position, pad_has_extinguisher, drop_payload, inside_boundary
 )
 
 
 class MissionController:
-    """Main mission controller FSM for drone operations"""
+    """Main mission controller FSM for drone operations. This is the second level
+    of abstraction in the codebase, with Driver being the highest level."""
 
     def __init__(self, mission_number, site_gps, mission_boundary, home_position, 
                  num_laps=3, mission_strategy=None, building_entry_point=None, 
@@ -35,6 +37,7 @@ class MissionController:
         
         # Mission type detection from strategy
         if mission_strategy is None:
+            #MissionOne comes from strategies.py
             self.mission_strategy = MissionOne(mission_boundary)
             self.mission_type = MissionType.MISSION_ONE
         else:
@@ -76,332 +79,193 @@ class MissionController:
         # Objectives
         self.objectives = []
 
+
+    #Runs the mission depending on the type. they are defined below the run file
     def run(self):
-        """
-        Main mission control loop. Executes state machine until mission complete.
-        Routes to Mission One or Mission Two FSM based on mission_type.
-        """
-        print(f"\n{'='*60}")
-        print(f"MISSION {self.mission_number} STARTED")
-        print(f"Type: {self.mission_type.name}")
-        print(f"Strategy: {self.mission_strategy.get_current_mission()}")
-        print(f"{'='*60}\n")
+        """Main mission control loop"""
+        print(f"MISSION {self.mission_number} STARTED - Type: {self.mission_type.name}")
         
-        # Route to appropriate state machine
         if self.mission_type == MissionType.MISSION_ONE:
             self._run_mission_one()
         elif self.mission_type == MissionType.MISSION_TWO:
             self._run_mission_two()
         
-        print(f"\n{'='*60}")
         print(f"MISSION {self.mission_number} COMPLETE")
-        print(f"{'='*60}\n")
     
     def _run_mission_one(self):
-        """
-        Mission One state machine: LAPS at home → TRANSIT → SEARCH → DROP → RETURN → LAND
-        """
+        """Mission One state machine"""
         while self.state != MissionState.COMPLETE:
-            # Check for mission timeout
             self.check_timeout()
-            
-            # Update telemetry
             self.update_telemetry()
 
-            # Execute current state
             if self.state == MissionState.INIT:
                 self.initialize()
-
             elif self.state == MissionState.TAKEOFF:
                 self.takeoff()
-
             elif self.state == MissionState.LAPS:
                 self.do_laps()
-
             elif self.state == MissionState.TRANSIT_TO_SITE:
                 self.go_to_site()
-
             elif self.state == MissionState.SEARCH_SITE:
                 self.search_site()
-
             elif self.state == MissionState.DROP_PAYLOAD:
                 self.handle_drop()
-
             elif self.state == MissionState.RETURN_HOME:
                 self.return_home()
-
             elif self.state == MissionState.LAND:
                 self.land()
 
-            time.sleep(0.1)  # Control loop timing
+            time.sleep(0.1)
     
     def _run_mission_two(self):
-        """
-        Mission Two state machine: ENTER_BUILDING → SEARCH_BUILDING → SPRAY_PADS → EXIT_BUILDING → RETURN → LAND
-        """
+        """Mission Two state machine"""
         while self.state != MissionState.COMPLETE:
-            # Check for mission timeout
             self.check_timeout()
-            
-            # Update telemetry
             self.update_telemetry()
 
-            # Execute current state
             if self.state == MissionState.INIT:
+                # just sets start time and changes state to takeoff
                 self.initialize()
-
             elif self.state == MissionState.TAKEOFF:
                 self.takeoff()
-
             elif self.state == MissionState.ENTER_BUILDING:
                 self.enter_building()
-
             elif self.state == MissionState.SEARCH_BUILDING:
                 self.search_building()
-
             elif self.state == MissionState.SPRAY_PADS:
                 self.spray_pads()
-
             elif self.state == MissionState.EXIT_BUILDING:
                 self.exit_building()
-
             elif self.state == MissionState.RETURN_HOME:
                 self.return_home()
-
             elif self.state == MissionState.LAND:
                 self.land()
 
-            time.sleep(0.1)  # Control loop timing
+            time.sleep(0.1)
 
     def initialize(self):
-        """
-        Initialize mission - set start time and transition to takeoff
-        """
+        """Initialize mission"""
         self.mission_start_time = time.time()
-        print(f"[INIT] Mission {self.mission_number} initialized at {self.mission_start_time}")
-        print(f"[INIT] Target site: {self.site_gps}")
-        print(f"[INIT] Home position: {self.home_position}")
         self.state = MissionState.TAKEOFF
 
     def takeoff(self):
-        """
-        Execute takeoff sequence.
-        Transitions to appropriate next state based on mission type.
-        """
-        print("[TAKEOFF] Beginning takeoff sequence")
+        """Execute takeoff"""
         self.current_mode = Mode.ASCEND
-        takeoff_drone()
-        print("[TAKEOFF] Takeoff complete")
+        autopilot = get_px4()
+        if autopilot:
+            #50 is the altitude
+            autopilot.takeoff(50, timeout=60)
         self.current_mode = Mode.AIRBORNE
         
-        # Branch based on mission type
         if self.mission_type == MissionType.MISSION_ONE:
-            print("[TAKEOFF] Mission One: Beginning laps")
             self.state = MissionState.LAPS
         elif self.mission_type == MissionType.MISSION_TWO:
-            print("[TAKEOFF] Mission Two: Navigating to building entry")
             self.state = MissionState.ENTER_BUILDING
 
     def do_laps(self):
-        """
-        Execute lap pattern at home location
-        """
-        print(f"[LAPS] Beginning lap {self.laps_completed + 1}/{self.lap_target}")
+        """Execute lap pattern"""
         self.mission_strategy.execute()
-        
         self.laps_completed += 1
-        print(f"[LAPS] Lap {self.laps_completed} completed")
 
         if self.laps_completed >= self.lap_target:
-            print(f"[LAPS] All {self.lap_target} laps completed, transiting to site")
             self.state = MissionState.TRANSIT_TO_SITE
         else:
-            print(f"[LAPS] {self.lap_target - self.laps_completed} laps remaining")
+            print(f"Lap {self.laps_completed}/{self.lap_target} complete")
 
     def go_to_site(self):
-        """
-        Navigate to the target site while respecting mission boundaries
-        """
-        print(f"[TRANSIT] Navigating to site at {self.site_gps}")
+        """Navigate to target site"""
         self.safe_goto(self.site_gps, self.boundary)
-
         if at_position(self.site_gps):
-            print("[TRANSIT] Arrived at site, beginning search")
             self.state = MissionState.SEARCH_SITE
 
     def search_site(self):
-        """
-        Execute search pattern to locate landing pad
-        """
-        print("[SEARCH] Beginning site search with boustrophedon pattern")
+        """Execute search pattern"""
         pad = boustrophedon_search()
-
-        if pad is not None:
-            print(f"[SEARCH] Pad detected at {pad}")
+        if pad:
             self.detected_pad = pad
             self.state = MissionState.DROP_PAYLOAD
         else:
-            print("[SEARCH] No pad detected, returning home")
             self.state = MissionState.RETURN_HOME
 
     def handle_drop(self):
-        """
-        Execute payload drop if conditions are met
-        """
-        print("[DROP] Handling payload drop")
-        
-        if not self.payload_available:
-            print("[DROP] No payload available, skipping drop")
-            self.state = MissionState.RETURN_HOME
-            return
-
-        # Check if pad already has extinguisher
-        if not pad_has_extinguisher(self.detected_pad):
-            print(f"[DROP] Dropping payload at {self.detected_pad}")
+        """Execute payload drop"""
+        if self.payload_available and not pad_has_extinguisher(self.detected_pad):
             drop_payload(self.detected_pad)
             self.payload_available = False
-            print("[DROP] Payload dropped successfully")
-        else:
-            print("[DROP] Pad already has extinguisher, skipping drop")
-
         self.state = MissionState.RETURN_HOME
 
     def check_timeout(self):
-        """
-        Monitor mission elapsed time and abort to home if timeout exceeded
-        """
-        if self.mission_start_time is None:
-            return
-
-        elapsed_time = time.time() - self.mission_start_time
-        
-        if elapsed_time > self.mission_duration_limit:
-            print(f"[TIMEOUT] Mission exceeded {self.mission_duration_limit}s limit. Aborting to home.")
+        """Check mission timeout"""
+        if self.mission_start_time and time.time() - self.mission_start_time > self.mission_duration_limit:
             self.state = MissionState.RETURN_HOME
 
     def return_home(self):
-        """
-        Navigate back to home location while respecting mission boundaries
-        """
-        print(f"[RETURN] Returning to home at {self.home_position}")
+        """Navigate back to home"""
         self.safe_goto(self.home_position, self.boundary)
-
         if at_position(self.home_position):
-            print("[RETURN] Arrived at home, preparing to land")
             self.state = MissionState.LAND
 
     def land(self):
-        """
-        Execute landing sequence
-        """
-        print("[LAND] Beginning landing sequence")
+        """Execute landing"""
         self.current_mode = Mode.LAND
-        land_drone()
-        print("[LAND] Landing complete, mission finished")
+        autopilot = get_px4()
+        if autopilot:
+            autopilot.land(timeout=60)
         self.current_mode = Mode.HOVER
         self.state = MissionState.COMPLETE
 
     def enter_building(self):
-        """
-        Navigate to building entry point and enter the building (Mission Two)
-        """
-        print(f"[ENTER] Navigating to building entry at {self.building_entry_point}")
+        """Navigate to building entry"""
         self.safe_goto(self.building_entry_point, self.boundary)
-
         if at_position(self.building_entry_point):
-            print("[ENTER] Arrived at building entry, entering building")
             self.building_interior = True
             self.state = MissionState.SEARCH_BUILDING
 
     def search_building(self):
-        """
-        Execute search pattern inside building to locate pads (Mission Two)
-        """
-        print("[SEARCH_BUILDING] Beginning interior search for pads")
-        pads = boustrophedon_search()  # Reuse search logic for interior
-
+        """Search building interior"""
+        pads = boustrophedon_search()
         if pads:
-            print(f"[SEARCH_BUILDING] Found {len(pads) if isinstance(pads, list) else 1} pad(s)")
             self.state = MissionState.SPRAY_PADS
         else:
-            print("[SEARCH_BUILDING] No pads detected, exiting building")
             self.state = MissionState.EXIT_BUILDING
 
     def spray_pads(self):
-        """
-        Execute spray/extinguish on located pads (Mission Two)
-        """
-        print("[SPRAY] Handling payload spray on detected pads")
-        
+        """Spray detected pads"""
         if isinstance(self.mission_strategy, MissionTwo):
-            # Use Mission Two's spray capability
             if self.mission_strategy.current_water_level <= 0:
-                print("[SPRAY] Water tank empty, exiting building")
                 self.state = MissionState.EXIT_BUILDING
                 return
-            
-            # Spray at detected location
             if self.detected_pad:
                 self.mission_strategy.spray_water(self.detected_pad)
-                print(f"[SPRAY] Applied extinguisher at {self.detected_pad}")
-            
-            self.state = MissionState.EXIT_BUILDING
-        else:
-            print("[SPRAY] Mission Two strategy not configured properly")
-            self.state = MissionState.EXIT_BUILDING
+        self.state = MissionState.EXIT_BUILDING
 
     def exit_building(self):
-        """
-        Navigate to building exit point and leave the building (Mission Two)
-        """
-        print(f"[EXIT] Navigating to building exit at {self.building_exit_point}")
+        """Navigate to building exit"""
         self.safe_goto(self.building_exit_point, self.boundary)
-
         if at_position(self.building_exit_point):
-            print("[EXIT] Exited building, returning to home")
             self.building_interior = False
             self.state = MissionState.RETURN_HOME
 
     def safe_goto(self, target, boundary):
-        """
-        Navigate to target while respecting mission boundaries
-        
-        Args:
-            target: GPS coordinates to navigate to
-            boundary: Mission boundary constraints
-            
-        Raises:
-            Exception: If target is outside mission boundaries
-        """
+        """Navigate to target while respecting boundaries"""
         if not inside_boundary(target, boundary):
-            raise Exception(f"Target {target} is outside mission boundary!")
-        
-        print(f"[GOTO] Navigating to {target}")
+            raise Exception(f"Target {target} outside mission boundary!")
         goto_drone(target)
     
     def update_telemetry(self):
-        """
-        Update drone telemetry from ardupilot
-        This should be called regularly to keep state synchronized
-        """
-        # TODO: Implement real telemetry reading from ardupilot
-        # self.current_location = read_current_position()
-        # self.battery_level = read_battery_level()
-        # self.altitude = read_altitude()
-        # self.current_mode = read_flight_mode()
+        """Update telemetry from autopilot"""
         pass
     
     def add_objective(self, objective):
-        """Add an objective to this mission"""
+        """Add objective"""
         self.objectives.append(objective)
     
     def set_mission_strategy(self, strategy):
-        """Switch to a different mission strategy"""
+        """Switch mission strategy"""
         self.mission_strategy = strategy
-        print(f"[CONTROLLER] Mission strategy switched to {strategy.get_current_mission()}")
     
     def get_mission_status(self):
-        """Get current mission status"""
+        """Get mission status"""
         return {
             "mission_number": self.mission_number,
             "state": self.state.name,

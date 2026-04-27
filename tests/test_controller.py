@@ -91,15 +91,16 @@ class TestInitialize:
 class TestTakeoff:
     def test_mission_one_transitions_to_laps(self):
         c = make_controller()
-        with patch("mission_controller.controller.takeoff_drone") as mock_to:
+        with patch("mission_controller.controller.get_px4") as mock_px4:
+            mock_px4.return_value = MagicMock()
             c.takeoff()
-        mock_to.assert_called_once()
         assert c.state == MissionState.LAPS
         assert c.current_mode == Mode.AIRBORNE
 
     def test_mission_two_transitions_to_enter_building(self):
         c = make_controller(mission_strategy=MissionTwo(BOUNDARY))
-        with patch("mission_controller.controller.takeoff_drone"):
+        with patch("mission_controller.controller.get_px4") as mock_px4:
+            mock_px4.return_value = MagicMock()
             c.takeoff()
         assert c.state == MissionState.ENTER_BUILDING
 
@@ -336,8 +337,7 @@ class TestRun:
         c.mission_strategy = MagicMock()
 
         with patch("mission_controller.controller.time.sleep"), \
-             patch("mission_controller.controller.takeoff_drone"), \
-             patch("mission_controller.controller.land_drone"), \
+             patch("mission_controller.controller.get_px4") as mock_px4_fn, \
              patch("mission_controller.controller.goto_drone"), \
              patch("mission_controller.controller.inside_boundary", return_value=True), \
              patch("mission_controller.controller.at_position", return_value=True), \

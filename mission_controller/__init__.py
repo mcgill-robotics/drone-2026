@@ -26,7 +26,7 @@ from .driver import Driver
 
 # Stub functions
 from .stubs import (
-    takeoff_drone, land_drone, goto_drone, run_lap_algorithm,
+    goto_drone, run_lap_algorithm,
     boustrophedon_search, at_position, pad_has_extinguisher,
     drop_payload, inside_boundary, extinguish_fire, take_survey_photos,
     release_payload, generate_print_pattern, generate_potential_field_path
@@ -60,7 +60,7 @@ __all__ = [
     "Driver",
     
     # Stubs
-    "takeoff_drone", "land_drone", "goto_drone", "run_lap_algorithm",
+    "goto_drone", "run_lap_algorithm",
     "boustrophedon_search", "at_position", "pad_has_extinguisher",
     "drop_payload", "inside_boundary", "extinguish_fire", "take_survey_photos",
     "release_payload", "generate_print_pattern", "generate_potential_field_path",
