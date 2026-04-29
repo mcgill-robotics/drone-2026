@@ -8,6 +8,8 @@ Combines:
 This is the main public entry point used by the rest of the system.
 """
 
+from time import time
+
 import rclpy
 import subprocess
 
@@ -65,16 +67,18 @@ def boot_px4(fcu_url="serial:///dev/ttyTHS1:921600", namespace="mavros"):
         ]
 
         # Start the process
-        _px4_process = subprocess.Popen(
-            cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True
-        )
+        _px4_process = subprocess.Popen(cmd)
 
         print(f"[PX4] PX4 booting process started (PID: {_px4_process.pid})")
         print("[PX4] Waiting for PX4 to initialize...")
-
+        # Wait up to 30 seconds for process to stabilize
+        time.sleep(10)
+        # Check if process crashed
+        if _px4_process.poll() is not None:
+            print(f"[PX4] ERROR: Process exited with code {_px4_process.poll()}")
+            return None
+        
+        print("[PX4] ✓ MAVROS boot complete")
         return _px4_process
 
     except Exception as e:
