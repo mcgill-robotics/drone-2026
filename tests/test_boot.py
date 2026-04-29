@@ -12,7 +12,7 @@ This script:
 
 import sys
 import os
-from time import time
+import time
 import subprocess
 
 # Add parent directory to path

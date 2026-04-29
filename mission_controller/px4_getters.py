@@ -51,6 +51,13 @@ except ImportError:
     OPENCV_AVAILABLE = False
     cv2 = None
 
+try:
+    from cv_bridge import CvBridge
+    CVBRIDGE_AVAILABLE = True
+except Exception as e:
+    CVBRIDGE_AVAILABLE = False
+    CvBridge = None
+
 
 
 class PX4Getters(Node):
