@@ -86,7 +86,7 @@ def check_px4_connection(timeout=30):
             else:
                 elapsed = int(time.time() - start_time)
                 print(f"Waiting for connection... ({elapsed}s)")
-                time.sleep(2)
+                time.sleep(3)
                 
         except Exception as e:
             elapsed = int(time.time() - start_time)
