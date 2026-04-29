@@ -54,9 +54,10 @@ except ImportError:
 try:
     from cv_bridge import CvBridge
     CVBRIDGE_AVAILABLE = True
-except (ImportError, AttributeError) as e:
+except Exception as e:
     CVBRIDGE_AVAILABLE = False
     CvBridge = None
+    print(f"[WARNING] cv_bridge import failed: {type(e).__name__}: {e}")
 
 
 class PX4Getters(Node):
