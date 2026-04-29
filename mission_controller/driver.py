@@ -9,10 +9,10 @@ from .controller import MissionController
 
 class Driver:
     """
-    this class is a mission manager that hanfdles creating, executing
+    this class is a mission manager that handles creating, executing
     and logging drone missions. You need to instantiate a Driver object
     to then run the missions. this is the highest level of abstraction
-    in the codebase.
+    in the codebase. You can run stuff like driver.creat_mission() and driver.start_mission()
     """
     
     def __init__(self):
