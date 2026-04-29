@@ -545,6 +545,58 @@ class PX4Setters:
         print("[PX4] ✓ Background heartbeat stream stopped")
         return True
 
+    def wait_for_arm_with_heartbeat(self, timeout=60, heartbeat_rate=10):
+        """
+        Wait for drone to be armed while maintaining OFFBOARD mode via manual heartbeat.
+        
+        This is useful when you need to wait for manual arming (RC or button) without
+        using a background thread. It publishes heartbeat setpoints to keep OFFBOARD
+        mode alive while blocking on the arm check.
+        
+        Args:
+            timeout: Maximum time to wait in seconds (default 60)
+            heartbeat_rate: Heartbeat publishing rate in Hz (default 10)
+        
+        Returns:
+            True if armed within timeout, False if timeout occurred
+        
+        Usage:
+            px4.start_offboard()  # Switch to OFFBOARD mode
+            if px4.wait_for_arm_with_heartbeat(timeout=60):
+                # Drone is armed, proceed with commands
+                px4.send_velocity_setpoint(0, 0, 0.5)
+            else:
+                # Timeout - not armed
+                return False
+        """
+        heartbeat_interval = 1.0 / heartbeat_rate
+        start_time = time.time()
+        heartbeat_count = 0
+        
+        print(f"[PX4] Waiting for arm (timeout={timeout}s, heartbeat={heartbeat_rate}Hz)...")
+        
+        while (time.time() - start_time) < timeout:
+            # Publish heartbeat to maintain OFFBOARD mode
+            self.send_velocity_setpoint(0.0, 0.0, 0.0, 0.0)
+            heartbeat_count += 1
+            
+            # Check if armed
+            if self.is_armed():
+                elapsed = time.time() - start_time
+                print(f"[PX4] ✓ Vehicle armed in {elapsed:.1f}s ({heartbeat_count} heartbeats)")
+                return True
+            
+            # Log progress occasionally
+            remaining = int(timeout - (time.time() - start_time))
+            if remaining > 0 and remaining % 10 == 0:
+                print(f"[PX4] Waiting... {remaining}s remaining ({heartbeat_count} heartbeats sent)")
+            
+            # Sleep for heartbeat interval
+            time.sleep(heartbeat_interval)
+        
+        print(f"[PX4] ✗ Arm timeout after {timeout}s ({heartbeat_count} heartbeats)")
+        return False
+
     def _heartbeat_worker(self, rate_hz):
         """
         Worker thread function that publishes a lightweight heartbeat message.

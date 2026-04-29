@@ -1,0 +1,187 @@
+#!/usr/bin/env python3
+"""
+OFFBOARD Mode Arming Test
+
+Simple test to verify arming in OFFBOARD mode:
+1. Boot PX4 and connect to MAVROS
+2. Switch to OFFBOARD mode
+3. Start heartbeat thread (10Hz zero-velocity setpoints)
+4. Wait for manual arm via RC transmitter
+5. Stop heartbeat thread and exit
+
+This is a minimal test to check if manual arming works in OFFBOARD mode
+with a continuous heartbeat thread running.
+
+Usage:
+    python3 test_arm.py --sitl              # Use SITL simulation
+    python3 test_arm.py --hardware           # Use real hardware on USB
+    python3 test_arm.py --port /dev/ttyUSB0 # Custom port
+"""
+
+import sys
+import os
+
+# Add parent directory to path so mission_controller can be imported
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+
+import rclpy
+import time
+import argparse
+from mission_controller.px4_interface import init_px4, boot_px4, stop_px4
+
+
+class ArmTest:
+    """OFFBOARD mode arming test class"""
+
+    def __init__(self, px4, verbose=True):
+        """
+        Initialize ARM tester
+
+        Args:
+            px4: PX4Interface instance
+            verbose: Print status messages
+        """
+        self.px4 = px4
+        self.verbose = verbose
+
+    def log(self, msg):
+        """Print log message if verbose"""
+        if self.verbose:
+            print(msg)
+
+    def test_arm(self):
+        """
+        Test arming sequence in OFFBOARD mode
+        
+        Steps:
+        1. Verify MAVROS connection
+        2. Switch to OFFBOARD mode
+        3. Start unified heartbeat thread
+        4. Wait for manual arm
+        5. Stop heartbeat thread
+        """
+        
+        # Step 1: Verify MAVROS connection
+        self.log("\nChecking MAVROS connection...")
+        if not self.px4.connected:
+            self.log("Not connected to MAVROS")
+            return False
+        self.log("Connected to MAVROS")
+
+        # Step 2: Switch to OFFBOARD mode
+        self.log("\nSwitching to OFFBOARD mode...")
+        if not self.px4.start_offboard():
+            self.log("Failed to switch to OFFBOARD mode")
+            return False
+        self.log("OFFBOARD mode active")
+
+        # Step 3: Wait for manual arm (uses wait_for_arm_with_heartbeat internally)
+        # This publishes heartbeat manually in a blocking loop until armed
+        self.log("\nWaiting for manual arm (60 seconds)...")
+        self.log("Please arm the vehicle manually via RC transmitter")
+        
+        if not self.px4.wait_for_arm_with_heartbeat(timeout=60, heartbeat_rate=10):
+            self.log("Arm timeout - vehicle was not armed")
+            return False
+
+        # Step 4: Start background heartbeat thread for flight
+        # Now that we're armed, start the background thread for mission flight
+        self.log("\nStarting background heartbeat thread for flight...")
+        if not self.px4.start_offboard_stream_background():
+            self.log("Warning: Failed to start background stream")
+            # Don't fail here - the vehicle is already armed
+        self.log("Background stream started")
+
+        # Step 5: Stop heartbeat thread
+        self.log("\nStopping background heartbeat thread...")
+        self.px4.stop_offboard_stream_background()
+        self.log("Heartbeat thread stopped")
+
+        self.log("\nArming test passed!")
+        return True
+
+
+def main():
+    """Main test runner"""
+    parser = argparse.ArgumentParser(description="Test OFFBOARD mode arming sequence")
+    parser.add_argument(
+        "--sitl",
+        action="store_true",
+        help="Use SITL simulation (localhost:14540)",
+    )
+    parser.add_argument(
+        "--hardware",
+        action="store_true",
+        help="Use real hardware on /dev/ttyUSB0",
+    )
+    parser.add_argument(
+        "--port",
+        type=str,
+        default=None,
+        help="Custom serial port (e.g., /dev/ttyUSB0 or /dev/ttyTHS1)",
+    )
+
+    args = parser.parse_args()
+
+    # Determine connection method
+    sitl = args.sitl
+    port = args.port
+
+    if args.hardware:
+        port = "/dev/ttyUSB0"
+        sitl = False
+
+    # Initialize ROS 2
+    rclpy.init()
+
+    try:
+        # Boot PX4
+        print("[MAIN] Booting PX4...")
+        fcu_url = "serial:///dev/ttyTHS1:921600"
+        boot_px4(fcu_url=fcu_url)
+        print("PX4 booted")
+
+        # Wait for MAVROS to initialize
+        print("[MAIN] Waiting 10s for MAVROS initialization...")
+        time.sleep(10)
+
+        # Initialize PX4 interface
+        print("Initializing PX4Interface...")
+        px4 = init_px4()
+
+        if not px4.connected:
+            print("Failed to connect to MAVROS")
+            return False
+
+        print("Connected to MAVROS")
+
+        # Run arm test
+        tester = ArmTest(px4, verbose=True)
+        success = tester.test_arm()
+
+        if success:
+            print("\n[MAIN] ✓ Test passed!")
+        else:
+            print("\n[MAIN] ✗ Test failed")
+
+        return success
+
+    except KeyboardInterrupt:
+        print("\n[MAIN] Test interrupted by user")
+        return False
+    except Exception as e:
+        print(f"\n[MAIN] Test failed with exception: {e}")
+        import traceback
+
+        traceback.print_exc()
+        return False
+    finally:
+        # Cleanup
+        print("[MAIN] Shutting down...")
+        stop_px4()
+        rclpy.shutdown()
+
+
+if __name__ == "__main__":
+    success = main()
+    sys.exit(0 if success else 1)
