@@ -8,8 +8,7 @@ Combines:
 This is the main public entry point used by the rest of the system.
 """
 
-from time import time
-
+import time
 import rclpy
 import subprocess
 
