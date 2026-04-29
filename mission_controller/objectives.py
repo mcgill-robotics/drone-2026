@@ -1,6 +1,7 @@
 """
 Objective classes for mission planning
-Objectives represent specific tasks to be accomplished during a mission
+Objectives represent specific tasks to be accomplished during a mission.
+A mission can have many objectives, and the MissionController will manage their execution.
 """
 from abc import ABC, abstractmethod
 from .stubs import extinguish_fire, take_survey_photos, release_payload
@@ -62,14 +63,16 @@ class ExtinguishObjective(Objective):
         Execute fire extinguishing procedure
         This is called when drone reaches the fire location
         """
+        # TODO: WE NEED TO IMPLEMENT THIS SEE RYAN
         print(f"[OBJECTIVE] Executing fire extinguish at {self.location}")
         extinguish_fire(self.location)
         self.set_complete()
     
+
     def detect_fire(self):
         """Fire detection logic - stub"""
         print(f"[OBJECTIVE] Detecting fire at {self.location}")
-        # TODO: Implement fire detection using vision/thermal sensors
+        # TODO: YOLO model for the red fire targets
         self.fire_detected = True
         return self.fire_detected
 

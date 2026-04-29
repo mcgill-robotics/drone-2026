@@ -12,10 +12,16 @@ This script demonstrates position-based offboard control:
 This is similar to the C++ example but adapted for MAVROS/velocity setpoints.
 """
 
+import sys
+import os
+
+# Add parent directory to path so mission_controller can be imported
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+
 import rclpy
 import time
 import argparse
-from px4_interface import init_px4, boot_px4, stop_px4
+from mission_controller.px4_interface import init_px4, boot_px4, stop_px4
 
 
 class OffboardPositionTest:
@@ -89,12 +95,12 @@ class OffboardPositionTest:
             # Step 5: Send position setpoint (move to 0, 0, -5m like C++ example)
             # In our velocity-based system, we'll fly upward at 1 m/s for 5 seconds
             self.log("\n[TEST] Sending upward velocity command (1 m/s up)...")
-            self.px4.send_velocity_setpoint(0.0, 0.0, 1.0, 0.0)  # Fly up
+            self.px4.send_velocity_setpoint(0.0, 0.0, 0.5, 0.0)  # Fly up
             self.log("[TEST] ✓ Velocity command sent: moving upward")
 
             # Step 6: Maintain for 5 seconds
             self.log("\n[TEST] Maintaining position for 5 seconds...")
-            time.sleep(5)
+            time.sleep(3)
             self.log("[TEST] ✓ Position maintained for 5 seconds")
 
             # Step 7: Stop moving (hover)

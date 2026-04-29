@@ -11,8 +11,8 @@ This is the main public entry point used by the rest of the system.
 import rclpy
 import subprocess
 
-from px4_getters import PX4Getters
-from px4_setters import PX4Setters
+from .px4_getters import PX4Getters
+from .px4_setters import PX4Setters
 
 
 class PX4Interface(PX4Setters, PX4Getters):
