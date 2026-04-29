@@ -200,7 +200,7 @@ Examples:
     # Boot PX4
     print(f"[MAIN] Booting PX4...")
     boot_px4(fcu_url=fcu_url)
-    time.sleep(3)  # Wait for MAVROS to connect
+    time.sleep(10)  # Wait for MAVROS to connect
 
     # Initialize ROS2
     rclpy.init()
