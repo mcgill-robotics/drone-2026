@@ -33,16 +33,18 @@ from mission_controller.px4_interface import init_px4, boot_px4, stop_px4
 class ArmTest:
     """OFFBOARD mode arming test class"""
 
-    def __init__(self, px4, verbose=True):
+    def __init__(self, px4, verbose=True, manual_arm=False):
         """
         Initialize ARM tester
 
         Args:
             px4: PX4Interface instance
             verbose: Print status messages
+            manual_arm: If True, wait for manual RC arm; if False, use API arm
         """
         self.px4 = px4
         self.verbose = verbose
+        self.manual_arm = manual_arm
 
     def log(self, msg):
         """Print log message if verbose"""
@@ -75,14 +77,40 @@ class ArmTest:
             return False
         self.log("OFFBOARD mode active")
 
-        # Step 3: Wait for manual arm (uses wait_for_arm_with_heartbeat internally)
-        # This publishes heartbeat manually in a blocking loop until armed
-        self.log("\nWaiting for manual arm (60 seconds)...")
-        self.log("Please arm the vehicle manually via RC transmitter")
-        
-        if not self.px4.wait_for_arm_with_heartbeat(timeout=60, heartbeat_rate=10):
-            self.log("Arm timeout - vehicle was not armed")
-            return False
+        # Step 3: Print system diagnostics before arming
+        self.log("\n=== PRE-ARM DIAGNOSTICS ===")
+        self.log(f"Armed: {self.px4.is_armed()}")
+        self.log(f"Mode: {self.px4.get_mode()}")
+        battery = self.px4.get_battery_status()
+        if battery:
+            self.log(f"Battery Voltage: {battery.get('voltage', 'N/A')}V")
+            self.log(f"Battery Current: {battery.get('current', 'N/A')}A")
+            self.log(f"Battery Remaining: {battery.get('remaining', 'N/A')}%")
+        gps = self.px4.get_gps_raw()
+        if gps:
+            self.log(f"GPS Satellites: {gps.get('satellites_visible', 'N/A')}")
+            self.log(f"GPS Fix: {gps.get('fix_type', 'N/A')}")
+        home = self.px4.get_home_location()
+        if home:
+            self.log(f"Home Set: Yes ({home['lat']}, {home['lon']})")
+        else:
+            self.log(f"Home Set: No")
+        self.log("==========================\n")
+
+        # Step 4: Wait for arm or arm programmatically
+        if self.manual_arm:
+            self.log("\nWaiting for manual arm (60 seconds)...")
+            self.log("Please arm the vehicle manually via RC transmitter")
+            
+            if not self.px4.wait_for_arm_with_heartbeat(timeout=60, heartbeat_rate=10):
+                self.log("Arm timeout - vehicle was not armed")
+                return False
+        else:
+            self.log("\nArming vehicle via API...")
+            if not self.px4.arm_vehicle(timeout=20):
+                self.log("API arm failed")
+                return False
+            self.log("✓ Vehicle armed via API")
 
         # Step 4: Start background heartbeat thread for flight
         # Now that we're armed, start the background thread for mission flight
@@ -120,12 +148,18 @@ def main():
         default=None,
         help="Custom serial port (e.g., /dev/ttyUSB0 or /dev/ttyTHS1)",
     )
+    parser.add_argument(
+        "--manual",
+        action="store_true",
+        help="Wait for manual RC arm instead of using API arm",
+    )
 
     args = parser.parse_args()
 
     # Determine connection method
     sitl = args.sitl
     port = args.port
+    manual_arm = args.manual
 
     if args.hardware:
         port = "/dev/ttyUSB0"
@@ -156,7 +190,7 @@ def main():
         print("Connected to MAVROS")
 
         # Run arm test
-        tester = ArmTest(px4, verbose=True)
+        tester = ArmTest(px4, verbose=True, manual_arm=manual_arm)
         success = tester.test_arm()
 
         if success:
