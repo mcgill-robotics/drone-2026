@@ -42,15 +42,7 @@ from mavros_msgs.msg import (
     RTKBaseline,
 )
 from mavros_msgs.srv import CommandBool, SetMode, CommandTOL, CommandHome, ParamSet
-from sensor_msgs.msg import BatteryState, NavSatFix, Imu, Image
-
-try:
-    import cv2
-    OPENCV_AVAILABLE = True
-except ImportError:
-    OPENCV_AVAILABLE = False
-    cv2 = None
-
+from sensor_msgs.msg import BatteryState, NavSatFix, Imu
 
 
 class PX4Getters(Node):
@@ -132,13 +124,7 @@ class PX4Getters(Node):
         self._seen_rtk_2 = False
         self._seen_rtk_baseline = False
 
-        # =========================================================
-        # Camera streaming
-        # =========================================================
-        self.current_camera_frame = None
-        self._seen_camera_frame = False
-        self._last_camera_frame_time = None
-        self.cv_bridge = CvBridge() if CVBRIDGE_AVAILABLE else None
+
 
         # =========================================================
         # Timestamp trackers for debugging
@@ -305,13 +291,7 @@ class PX4Getters(Node):
             qos_profile_sensor_data
         )
 
-        # Camera subscription for RealSense D455
-        self.camera_sub = self.create_subscription(
-            Image,
-            "/camera/camera/color/image_raw",
-            self._camera_callback,
-            qos_profile_sensor_data
-        )
+
 
         # =========================================================
         # Service clients and publishers
@@ -503,25 +483,6 @@ class PX4Getters(Node):
         if not self._seen_rtk_baseline:
             print("[PX4] Receiving RTK baseline data")
             self._seen_rtk_baseline = True
-
-    def _camera_callback(self, msg):
-        """Update camera frame from RealSense D455"""
-        if not CVBRIDGE_AVAILABLE:
-            if not self._seen_camera_frame:
-                print("[CAMERA] cv_bridge not available. Install opencv-python and cv-bridge.")
-            return
-        
-        try:
-            # Convert ROS Image message to OpenCV format
-            self.current_camera_frame = self.cv_bridge.imgmsg_to_cv2(msg, desired_encoding='bgr8')
-            self._last_camera_frame_time = time.time()
-            
-            if not self._seen_camera_frame:
-                height, width = self.current_camera_frame.shape[:2]
-                print(f"[CAMERA] Receiving camera frames from RealSense D455 ({width}x{height})")
-                self._seen_camera_frame = True
-        except Exception as e:
-            print(f"[CAMERA][ERROR] Failed to convert camera frame: {str(e)}")
 
     # =========================================================
     # Helper functions used by getter APIs
@@ -1096,158 +1057,6 @@ class PX4Getters(Node):
         print(f"gpsstatus/gps1/rtk:   {status_str(self._last_rtk_1_time)}")
         print(f"gpsstatus/gps2/rtk:   {status_str(self._last_rtk_2_time)}")
         print(f"gps_rtk/rtk_baseline: {status_str(self._last_rtk_baseline_time)}")
-        print("=" * 60)
-
-    # =========================================================
-    # Camera streaming methods
-    # =========================================================
-
-    def get_camera_frame(self):
-        """
-        Get the latest camera frame as a numpy array.
-        Returns None if no frame has been received yet.
-        """
-        return self.current_camera_frame
-
-    def display_camera_frames(self, window_name="RealSense D455 - Camera Feed", fps_limit=30):
-        """
-        Display camera frames from RealSense D455 in real-time.
-        
-        This runs a continuous loop that displays frames received from the Jetson.
-        Press 'q' to quit the display window.
-        
-        Args:
-            window_name: Name of the OpenCV window
-            fps_limit: Maximum frame rate to display (default 30 fps)
-        
-        Returns:
-            True if display completed normally, False if an error occurred
-        """
-        if not OPENCV_AVAILABLE:
-            print("[CAMERA][ERROR] OpenCV (cv2) is not installed.")
-            print("[CAMERA] Install it with: pip install opencv-python")
-            return False
-        
-        print(f"[CAMERA] Starting camera display... (Press 'q' to quit)")
-        frame_interval = 1.0 / fps_limit
-        last_frame_time = 0
-        
-        while True:
-            current_time = time.time()
-            
-            # Throttle display to fps_limit
-            if current_time - last_frame_time < frame_interval:
-                time.sleep(0.001)
-                # Process ROS messages even while throttling
-                rclpy.spin_once(self, timeout_sec=0.0001)
-                continue
-            
-            # Process ROS 2 messages to receive new camera frames
-            rclpy.spin_once(self, timeout_sec=0.001)
-            
-            frame = self.current_camera_frame
-            
-            if frame is None:
-                # Display waiting message
-                display_frame = np.zeros((480, 640, 3), dtype=np.uint8)
-                cv2.putText(
-                    display_frame,
-                    "Waiting for camera frames...",
-                    (80, 240),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    1.2,
-                    (0, 255, 0),
-                    2
-                )
-                cv2.imshow(window_name, display_frame)
-            else:
-                # Display the frame
-                display_frame = frame.copy()
-                
-                # Add FPS counter
-                fps = 1.0 / (current_time - last_frame_time) if last_frame_time > 0 else 0
-                cv2.putText(
-                    display_frame,
-                    f"FPS: {fps:.1f}",
-                    (10, 30),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    1,
-                    (0, 255, 0),
-                    2
-                )
-                
-                cv2.imshow(window_name, display_frame)
-            
-            last_frame_time = current_time
-            
-            # Check for 'q' key to quit
-            key = cv2.waitKey(1) & 0xFF
-            if key == ord('q'):
-                print("[CAMERA] Display window closed by user")
-                cv2.destroyAllWindows()
-                return True
-
-    def save_camera_frame(self, filepath="camera_frame.png"):
-        """
-        Save the latest camera frame to a file.
-        
-        Args:
-            filepath: Path where to save the frame (default: 'camera_frame.png')
-        
-        Returns:
-            True if frame was saved, False otherwise
-        """
-        if self.current_camera_frame is None:
-            print("[CAMERA][ERROR] No camera frame available to save")
-            return False
-        
-        if not OPENCV_AVAILABLE:
-            print("[CAMERA][ERROR] OpenCV (cv2) is not installed")
-            return False
-        
-        try:
-            success = cv2.imwrite(filepath, self.current_camera_frame)
-            if success:
-                print(f"[CAMERA] Frame saved to: {filepath}")
-                return True
-            else:
-                print(f"[CAMERA][ERROR] Failed to save frame to: {filepath}")
-                return False
-        except Exception as e:
-            print(f"[CAMERA][ERROR] Error saving frame: {str(e)}")
-            return False
-
-    def get_camera_frame_shape(self):
-        """
-        Get the shape (height, width, channels) of the camera frame.
-        Returns None if no frame has been received yet.
-        """
-        if self.current_camera_frame is None:
-            return None
-        return self.current_camera_frame.shape
-
-    def print_camera_status(self):
-        """Print camera status and reception health"""
-        print("=" * 60)
-        print("[CAMERA] RealSense D455 Status")
-        
-        if self.current_camera_frame is None:
-            print("Status: NO DATA - Waiting for frames...")
-        else:
-            age = time.time() - self._last_camera_frame_time if self._last_camera_frame_time else 0
-            if age > 2.0:
-                print(f"Status: STALE ({age:.1f}s old)")
-            else:
-                print(f"Status: OK ({age:.3f}s old)")
-            
-            shape = self.get_camera_frame_shape()
-            if shape:
-                height, width = shape[0], shape[1]
-                print(f"Resolution: {width}x{height}")
-                if len(shape) > 2:
-                    print(f"Channels: {shape[2]}")
-        
-        print("Topic: /camera/camera/color/image_raw")
         print("=" * 60)
 
 
