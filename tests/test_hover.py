@@ -1,15 +1,24 @@
 #!/usr/bin/env python3
 """
-OFFBOARD Position Control Test (Python equivalent of C++ example)
+OFFBOARD Hover Test
 
-This script demonstrates position-based offboard control:
-1. Start background stream (maintains OFFBOARD mode)
-2. Switch to OFFBOARD mode and arm
-3. Send a position setpoint to fly to (0, 0, -5m)
-4. Maintain that position for 10 seconds
-5. Return to hover and land
+This script demonstrates basic hover control in OFFBOARD mode:
+1. Boot PX4 and connect to MAVROS
+2. Switch to OFFBOARD mode
+3. Wait for manual RC arm (can use --api for automatic arm)
+4. Fly upward at 0.5 m/s for 3 seconds
+5. Hover (stop movement) for 3 seconds
+6. Land and stop background stream
 
-This is similar to the C++ example but adapted for MAVROS/velocity setpoints.
+Default: Wait for manual RC arm
+With --api: Automatically arm via MAVROS
+
+Usage:
+    python3 test_hover.py                   # Manual RC arm with default hardware port
+    python3 test_hover.py --sitl            # Manual RC arm with SITL
+    python3 test_hover.py --hardware        # Manual RC arm with real hardware
+    python3 test_hover.py --api             # API arm with default hardware port
+    python3 test_hover.py --port /dev/ttyUSB0  # Custom serial port
 """
 
 import sys
@@ -24,29 +33,31 @@ import argparse
 from mission_controller.px4_interface import init_px4, boot_px4, stop_px4
 
 
-class OffboardPositionTest:
-    """Position-based OFFBOARD control test"""
+class HoverTest:
+    """OFFBOARD hover test"""
 
-    def __init__(self, px4, verbose=True):
+    def __init__(self, px4, verbose=True, manual_arm=True):
         """
-        Initialize position control tester
+        Initialize hover tester
 
         Args:
             px4: PX4Interface instance
             verbose: Print status messages
+            manual_arm: If True, wait for manual RC arm; if False, use API arm
         """
         self.px4 = px4
         self.verbose = verbose
+        self.manual_arm = manual_arm
 
     def log(self, msg):
         """Print log message if verbose"""
         if self.verbose:
             print(msg)
 
-    def test_offboard_position(self):
-        """Test OFFBOARD mode with position control"""
+    def test_hover(self):
+        """Test OFFBOARD mode with hover control"""
         self.log("\n" + "="*70)
-        self.log("OFFBOARD POSITION CONTROL TEST")
+        self.log("OFFBOARD HOVER TEST")
         self.log("="*70 + "\n")
 
         try:
@@ -57,51 +68,44 @@ class OffboardPositionTest:
                 return False
             self.log("[TEST] ✓ Connected to MAVROS")
 
-            # Step 2: Start background setpoint stream
-            # This keeps OFFBOARD mode alive by publishing setpoints at 50Hz
+            # Step 2: Switch to OFFBOARD mode (without starting background stream yet)
+            self.log("\n[TEST] Switching to OFFBOARD mode...")
+            if not self.px4.start_offboard():
+                self.log("[TEST] Failed to switch to OFFBOARD mode")
+                return False
+            self.log("[TEST] ✓ OFFBOARD mode active")
+
+            # Step 3: Wait for arming (manual or API)
+            if self.manual_arm:
+                self.log("\n[TEST] Waiting for manual arm (60 seconds)...")
+                self.log("[TEST] Please arm the vehicle manually via RC transmitter")
+                
+                if not self.px4.wait_for_arm_with_heartbeat(timeout=60, heartbeat_rate=10):
+                    self.log("[TEST] Arm timeout - vehicle was not armed")
+                    return False
+            else:
+                self.log("\n[TEST] Arming vehicle via API...")
+                if not self.px4.arm_vehicle(timeout=20):
+                    self.log("[TEST] API arm failed")
+                    return False
+                self.log("[TEST] ✓ Vehicle armed via API")
+
+            # Step 4: Start background setpoint stream (now that we're armed)
             self.log("\n[TEST] Starting background setpoint stream...")
             if not self.px4.start_offboard_stream_background():
                 self.log("[TEST] Failed to start background stream")
                 return False
             self.log("[TEST] ✓ Background stream started (50Hz)")
 
-            # Step 3: Switch to OFFBOARD mode
-            self.log("\n[TEST] Switching to OFFBOARD mode...")
-            if not self.px4.start_offboard():
-                self.log("[TEST] Failed to switch to OFFBOARD mode")
-                self.px4.stop_offboard_stream_background()
-                return False
-            self.log("[TEST] ✓ OFFBOARD mode active")
-
-            # Step 4: Wait for manual arming (1 minute timeout)
-            self.log("\n[TEST] Waiting for manual arm command (60 seconds)...")
-            self.log("[TEST] Please arm the vehicle manually within 60 seconds")
-            
-            arm_timeout = 60
-            start_time = time.time()
-            while (time.time() - start_time) < arm_timeout:
-                if self.px4.is_armed():
-                    self.log(f"[TEST] ✓ Vehicle armed!")
-                    break
-                remaining = int(arm_timeout - (time.time() - start_time))
-                if remaining % 10 == 0:
-                    self.log(f"[TEST] Waiting... {remaining} seconds remaining")
-                time.sleep(1)
-            else:
-                self.log("[TEST] Arming timeout - vehicle was not armed within 60 seconds")
-                self.px4.stop_offboard_stream_background()
-                return False
-            time.sleep(8)
-            # Step 5: Send position setpoint (move to 0, 0, -5m like C++ example)
-            # In our velocity-based system, we'll fly upward at 1 m/s for 5 seconds
-            self.log("\n[TEST] Sending upward velocity command (1 m/s up)...")
+            # Step 5: Fly upward at 0.5 m/s for 3 seconds
+            self.log("\n[TEST] Sending upward velocity command (0.5 m/s up)...")
             self.px4.send_velocity_setpoint(0.0, 0.0, 0.5, 0.0)  # Fly up
             self.log("[TEST] ✓ Velocity command sent: moving upward")
 
-            # Step 6: Maintain for 5 seconds
-            self.log("\n[TEST] Maintaining position for 5 seconds...")
+            # Step 6: Maintain upward flight for 3 seconds
+            self.log("\n[TEST] Maintaining upward flight for 3 seconds...")
             time.sleep(3)
-            self.log("[TEST] ✓ Position maintained for 5 seconds")
+            self.log("[TEST] ✓ Upward flight maintained")
 
             # Step 7: Stop moving (hover)
             self.log("\n[TEST] Sending hover command (stop movement)...")
@@ -109,13 +113,15 @@ class OffboardPositionTest:
             self.log("[TEST] ✓ Hovering")
 
             # Step 8: Hover for 3 seconds
+            self.log("\n[TEST] Hovering for 3 seconds...")
             time.sleep(3)
+            self.log("[TEST] ✓ Hover complete")
 
             # Step 9: Land
             self.log("\n[TEST] Landing...")
             if not self.px4.land():
-                self.log("[TEST] Warning: Land command may have failed, stopping stream")
-            self.log("[TEST] ✓ Landing complete")
+                self.log("[TEST] Warning: Land command may have failed")
+            self.log("[TEST] ✓ Landing initiated")
 
             # Step 10: Stop background stream
             self.log("\n[TEST] Stopping background stream...")
@@ -124,7 +130,7 @@ class OffboardPositionTest:
                 return False
 
             self.log("\n" + "="*70)
-            self.log("✓ OFFBOARD POSITION CONTROL TEST COMPLETE")
+            self.log("✓ OFFBOARD HOVER TEST COMPLETE")
             self.log("="*70 + "\n")
 
             return True
@@ -157,65 +163,100 @@ class OffboardPositionTest:
 
 
 def main():
-    parser = argparse.ArgumentParser(
-        description="Test OFFBOARD position control on PX4/MAVROS",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-Examples:
-  python3 test_offboard_position.py --sitl                  # SITL simulation
-  python3 test_offboard_position.py --hardware              # Real hardware (default USB)
-  python3 test_offboard_position.py --port /dev/ttyUSB1    # Custom serial port
-        """
-    )
-
+    """Main test runner"""
+    parser = argparse.ArgumentParser(description="Test OFFBOARD hover sequence")
     parser.add_argument(
         "--sitl",
         action="store_true",
-        help="Use SITL (Software In The Loop) simulation"
+        help="Use SITL simulation (localhost:14540)",
     )
-
     parser.add_argument(
         "--hardware",
         action="store_true",
-        help="Use real hardware on default USB port"
+        help="Use real hardware on /dev/ttyUSB0",
     )
-
     parser.add_argument(
         "--port",
         type=str,
-        default="/dev/ttyUSB0",
-        help="Serial port for hardware connection (default: /dev/ttyUSB0)"
+        default=None,
+        help="Custom serial port (e.g., /dev/ttyUSB0 or /dev/ttyTHS1)",
+    )
+    parser.add_argument(
+        "--api",
+        action="store_true",
+        help="Use API arm instead of waiting for manual RC arm (default: manual RC arm)",
     )
 
     args = parser.parse_args()
 
-    # Determine FCU URL
-    if args.sitl:
-        fcu_url = "udp://127.0.0.1:14540"
-        print("[MAIN] Using SITL mode: UDP localhost:14540")
-    elif args.hardware or not args.sitl:
-        fcu_url = f"serial://{args.port}:921600"
-        print(f"[MAIN] Using hardware mode: {args.port} at 921600 baud")
+    # Determine connection method
+    sitl = args.sitl
+    port = args.port
+    manual_arm = not args.api  # Default to manual, unless --api flag is set
 
-    # Boot PX4
-    print(f"[MAIN] Booting PX4...")
-    boot_px4(fcu_url=fcu_url)
-    time.sleep(10)  # Wait for MAVROS to connect
+    if args.hardware:
+        port = "/dev/ttyUSB0"
+        sitl = False
 
-    # Initialize ROS2
+    # Initialize ROS 2
     rclpy.init()
 
-    # Create PX4 interface
-    px4 = init_px4()
-    time.sleep(2)  # Wait for subscriptions to warm up
+    try:
+        # Boot PX4
+        print("[MAIN] Booting PX4...")
+        
+        # Build FCU URL based on connection type
+        if sitl:
+            fcu_url = "udp://127.0.0.1:14540"
+            print("[MAIN] Using SITL (UDP)")
+        else:
+            fcu_url = f"serial:///{port}:921600" if port else "serial:///dev/ttyTHS1:921600"
+            print(f"[MAIN] Using hardware ({fcu_url})")
+        
+        boot_px4(fcu_url=fcu_url)
+        print("PX4 booted")
 
-    # Run test
-    tester = OffboardPositionTest(px4, verbose=True)
-    success = tester.test_offboard_position()
+        # Wait for MAVROS to initialize
+        print("[MAIN] Waiting 10s for MAVROS initialization...")
+        time.sleep(10)
 
-    # Exit with appropriate code
-    exit(0 if success else 1)
+        # Initialize PX4 interface
+        print("Initializing PX4Interface...")
+        px4 = init_px4()
+
+        if not px4.connected:
+            print("Failed to connect to MAVROS")
+            return False
+
+        print("Connected to MAVROS")
+
+        # Run hover test
+        tester = HoverTest(px4, verbose=True, manual_arm=manual_arm)
+        success = tester.test_hover()
+
+        if success:
+            print("\n[MAIN] ✓ Test passed!")
+        else:
+            print("\n[MAIN] ✗ Test failed")
+
+        return success
+
+    except KeyboardInterrupt:
+        print("\n[MAIN] Test interrupted by user")
+        return False
+    except Exception as e:
+        print(f"\n[MAIN] Test failed with exception: {e}")
+        import traceback
+
+        traceback.print_exc()
+        return False
+    finally:
+        # Cleanup
+        print("[MAIN] Shutting down...")
+        stop_px4()
+        rclpy.shutdown()
 
 
 if __name__ == "__main__":
-    main()
+    success = main()
+    sys.exit(0 if success else 1)
