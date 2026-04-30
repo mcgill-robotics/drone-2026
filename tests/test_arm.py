@@ -80,7 +80,6 @@ class ArmTest:
         # Step 3: Print system diagnostics before arming
         self.log("\n=== PRE-ARM DIAGNOSTICS ===")
         self.log(f"Armed: {self.px4.is_armed()}")
-        self.log(f"Mode: {self.px4.get_mode()}")
         battery = self.px4.get_battery_status()
         if battery:
             self.log(f"Battery Voltage: {battery.get('voltage', 'N/A')}V")
