@@ -2,24 +2,23 @@
 """
 OFFBOARD Mode Arming Test
 
-Test arming in OFFBOARD mode with two options:
+Test arming in OFFBOARD mode with manual RC arm as default:
 1. Boot PX4 and connect to MAVROS
 2. Switch to OFFBOARD mode
 3. Print pre-arm diagnostics (battery, GPS, home position)
-4. Arm vehicle (via API or manual RC)
+4. Wait for manual RC arm (default) or use API arm (--api flag)
 5. Start background heartbeat thread for flight
 6. Stop heartbeat thread and exit
 
-Supports both:
-- API arm (default): Automatically arms via MAVROS service
-- Manual RC arm (--manual flag): Waits for RC transmitter arm command
+Default: Waits for manual RC transmitter arm command
+With --api: Automatically arms via MAVROS service
 
 Usage:
-    python3 test_arm.py                     # API arm with default hardware port
-    python3 test_arm.py --sitl              # API arm with SITL simulation
-    python3 test_arm.py --hardware           # API arm with real hardware
-    python3 test_arm.py --manual             # Manual RC arm with default port
-    python3 test_arm.py --sitl --manual      # Manual RC arm with SITL
+    python3 test_arm.py                     # Manual RC arm with default hardware port
+    python3 test_arm.py --sitl              # Manual RC arm with SITL simulation
+    python3 test_arm.py --hardware           # Manual RC arm with real hardware
+    python3 test_arm.py --api                # API arm with default hardware port
+    python3 test_arm.py --sitl --api         # API arm with SITL
     python3 test_arm.py --port /dev/ttyUSB0 # Custom port
 """
 
@@ -154,9 +153,9 @@ def main():
         help="Custom serial port (e.g., /dev/ttyUSB0 or /dev/ttyTHS1)",
     )
     parser.add_argument(
-        "--manual",
+        "--api",
         action="store_true",
-        help="Wait for manual RC arm instead of using API arm",
+        help="Use API arm instead of waiting for manual RC arm (default: manual RC arm)",
     )
 
     args = parser.parse_args()
@@ -164,7 +163,7 @@ def main():
     # Determine connection method
     sitl = args.sitl
     port = args.port
-    manual_arm = args.manual
+    manual_arm = not args.api  # Default to manual, unless --api flag is set
 
     if args.hardware:
         port = "/dev/ttyUSB0"
