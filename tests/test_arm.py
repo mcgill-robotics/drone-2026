@@ -2,19 +2,24 @@
 """
 OFFBOARD Mode Arming Test
 
-Simple test to verify arming in OFFBOARD mode:
+Test arming in OFFBOARD mode with two options:
 1. Boot PX4 and connect to MAVROS
 2. Switch to OFFBOARD mode
-3. Start heartbeat thread (10Hz zero-velocity setpoints)
-4. Wait for manual arm via RC transmitter
-5. Stop heartbeat thread and exit
+3. Print pre-arm diagnostics (battery, GPS, home position)
+4. Arm vehicle (via API or manual RC)
+5. Start background heartbeat thread for flight
+6. Stop heartbeat thread and exit
 
-This is a minimal test to check if manual arming works in OFFBOARD mode
-with a continuous heartbeat thread running.
+Supports both:
+- API arm (default): Automatically arms via MAVROS service
+- Manual RC arm (--manual flag): Waits for RC transmitter arm command
 
 Usage:
-    python3 test_arm.py --sitl              # Use SITL simulation
-    python3 test_arm.py --hardware           # Use real hardware on USB
+    python3 test_arm.py                     # API arm with default hardware port
+    python3 test_arm.py --sitl              # API arm with SITL simulation
+    python3 test_arm.py --hardware           # API arm with real hardware
+    python3 test_arm.py --manual             # Manual RC arm with default port
+    python3 test_arm.py --sitl --manual      # Manual RC arm with SITL
     python3 test_arm.py --port /dev/ttyUSB0 # Custom port
 """
 
@@ -58,9 +63,10 @@ class ArmTest:
         Steps:
         1. Verify MAVROS connection
         2. Switch to OFFBOARD mode
-        3. Start unified heartbeat thread
-        4. Wait for manual arm
-        5. Stop heartbeat thread
+        3. Print pre-arm diagnostics
+        4. Arm vehicle (API or manual)
+        5. Start background heartbeat thread for flight
+        6. Stop heartbeat thread
         """
         
         # Step 1: Verify MAVROS connection
@@ -91,7 +97,7 @@ class ArmTest:
             self.log(f"GPS Fix: {gps.get('fix_type', 'N/A')}")
         home = self.px4.get_home_location()
         if home:
-            self.log(f"Home Set: Yes ({home['lat']}, {home['lon']})")
+            self.log(f"Home Set: Yes ({home['latitude']}, {home['longitude']}, {home['altitude']}m)")
         else:
             self.log(f"Home Set: No")
         self.log("==========================\n")
@@ -111,7 +117,7 @@ class ArmTest:
                 return False
             self.log("✓ Vehicle armed via API")
 
-        # Step 4: Start background heartbeat thread for flight
+        # Step 5: Start background heartbeat thread for flight
         # Now that we're armed, start the background thread for mission flight
         self.log("\nStarting background heartbeat thread for flight...")
         if not self.px4.start_offboard_stream_background():
@@ -119,7 +125,7 @@ class ArmTest:
             # Don't fail here - the vehicle is already armed
         self.log("Background stream started")
 
-        # Step 5: Stop heartbeat thread
+        # Step 6: Stop heartbeat thread
         self.log("\nStopping background heartbeat thread...")
         self.px4.stop_offboard_stream_background()
         self.log("Heartbeat thread stopped")
@@ -170,7 +176,15 @@ def main():
     try:
         # Boot PX4
         print("[MAIN] Booting PX4...")
-        fcu_url = "serial:///dev/ttyTHS1:921600"
+        
+        # Build FCU URL based on connection type
+        if sitl:
+            fcu_url = "udp://127.0.0.1:14540"
+            print("[MAIN] Using SITL (UDP)")
+        else:
+            fcu_url = f"serial:///{port}:921600" if port else "serial:///dev/ttyTHS1:921600"
+            print(f"[MAIN] Using hardware ({fcu_url})")
+        
         boot_px4(fcu_url=fcu_url)
         print("PX4 booted")
 
