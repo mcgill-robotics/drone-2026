@@ -159,6 +159,10 @@ def run_server():
                     robot.physics.position.y = dp["y"]
                     robot.physics.position.z = dp["z"]
 
+                # Update yaw from IMU if available
+                if "drone_yaw" in data:
+                    robot.current_yaw = data["drone_yaw"]
+
                 # Optionally update target waypoint
                 if "target" in data:
                     t = data["target"]

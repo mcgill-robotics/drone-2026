@@ -52,6 +52,7 @@ class Robot3D:
         self.current_env_type     = "SPARSE"
         self.env_history: list[str] = []
         self.yaw_rate             = 0.0       # rad/s, sent to Webots
+        self.current_yaw          = 0.0       # rad, estimated from velocity
         self.course_completed     = False
         self.wall_stall_counter   = 0
         self.last_target_distance = None
@@ -153,8 +154,11 @@ class Robot3D:
         hvel = Vector3D(self.smoothed_vel.x, self.smoothed_vel.y, 0)
         if hvel.length() > 0.5:
             desired_yaw = math.atan2(hvel.y, hvel.x)
-            # Proportional yaw controller (Webots will clamp it)
-            self.yaw_rate = desired_yaw * 0.5
+            # Compute shortest-path yaw error with angle wrapping
+            yaw_error = desired_yaw - self.current_yaw
+            yaw_error = (yaw_error + math.pi) % (2 * math.pi) - math.pi
+            # Proportional yaw controller
+            self.yaw_rate = yaw_error * 0.5
         else:
             self.yaw_rate = 0.0
 

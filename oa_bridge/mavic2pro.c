@@ -173,7 +173,7 @@ static double json_get_float(const char *src, const char *key) {
  * ────────────────────────────────────────────────────────────────────── */
 static int serialise_lidar(
     const WbLidarPoint *cloud, int total,
-    const double *gps,
+    const double *gps, double drone_yaw,
     double tx, double ty, double tz,
     char *buf, int buf_size)
 {
@@ -224,8 +224,10 @@ static int serialise_lidar(
 
   pos += snprintf(buf+pos, buf_size-pos,
     "],\"drone_pos\":{\"x\":%.4f,\"y\":%.4f,\"z\":%.4f}"
+    ",\"drone_yaw\":%.4f"
     ",\"target\":{\"x\":%.2f,\"y\":%.2f,\"z\":%.2f}}",
     gps[0], gps[1], gps[2],
+    drone_yaw,
     tx, ty, tz);
 
   return (pos < buf_size) ? 0 : -1;
@@ -315,7 +317,11 @@ int main(int argc, char **argv) {
     const double *rpy      = wb_inertial_unit_get_roll_pitch_yaw(imu);
     const double  roll     = rpy[0];
     const double  pitch    = rpy[1];
+<<<<<<< Updated upstream
     const double  yaw_ang  = rpy[2];
+=======
+    const double  yaw_imu  = rpy[2];
+>>>>>>> Stashed changes
     const double  altitude = wb_gps_get_values(gps)[2];
     const double *gps_pos  = wb_gps_get_values(gps);
     const double  roll_vel = wb_gyro_get_values(gyro)[0];
@@ -330,7 +336,7 @@ int main(int argc, char **argv) {
     /* ── 3. Send to Python / receive movement command ────────────── */
     if (bridge_ok && cloud) {
       int err = serialise_lidar(
-          cloud, total, gps_pos,
+          cloud, total, gps_pos, yaw_imu,
           TARGET_X, TARGET_Y, TARGET_Z,
           send_buf, SEND_BUF_SIZE);
 
