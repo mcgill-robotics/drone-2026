@@ -17,7 +17,12 @@ import time
 import rclpy
 import threading
 from geometry_msgs.msg import PoseStamped, TwistStamped
-from mavros_msgs.srv import CommandBool, SetMode, CommandTOL
+from mavros_msgs.srv import CommandBool, SetMode, CommandTOL, ParamSet
+from mavros_msgs.msg import ParamValue
+
+
+FT_TO_M = 0.3048
+DEFAULT_MAX_ALT_FT = 400  # FAA Part 107 ceiling
 
 
 class PX4Setters:
@@ -43,9 +48,65 @@ class PX4Setters:
         self._stream_running = False
         self._stream_lock = threading.Lock()
         self._last_user_publish_time = 0  # Track when user last published a command
-        
+
+        # Altitude limit (software-side clamp). None = no limit until set.
+        # Firmware fence is set independently via set_altitude_limit_ft().
+        self._max_alt_m = None
+
         # Call parent class __init__ (PX4Getters -> Node)
         super().__init__(**kwargs)
+
+    def set_altitude_limit_ft(self, feet=DEFAULT_MAX_ALT_FT, timeout=10):
+        """
+        Configure altitude limit in feet. Sets the ArduPilot fence on the FCU
+        AND records the limit locally for software-side setpoint clamping.
+
+        Call once after connect, before takeoff. ArduPilot params persist on
+        the FCU, so re-calling per-command is unnecessary.
+        """
+        if not self.connected:
+            print("[PX4] Not connected, cannot set altitude limit")
+            return False
+
+        meters = float(feet) * FT_TO_M
+        self._max_alt_m = meters
+
+        if not self.param_set_client.wait_for_service(timeout_sec=5):
+            print("[PX4] /param/set service unavailable; software clamp set, fence NOT set")
+            return False
+
+        # ArduPilot fence params:
+        # FENCE_ALT_MAX (m), FENCE_TYPE bit0 = max alt, FENCE_ENABLE = 1
+        params = [
+            ("FENCE_ALT_MAX", 0, meters),
+            ("FENCE_TYPE", 1, 0.0),     # bit0 = altitude
+            ("FENCE_ENABLE", 1, 0.0),
+        ]
+
+        for name, integer, real in params:
+            req = ParamSet.Request()
+            req.param_id = name
+            req.value = ParamValue(integer=int(integer), real=float(real))
+            future = self.param_set_client.call_async(req)
+            start = time.time()
+            while not future.done() and (time.time() - start) < timeout:
+                rclpy.spin_once(self, timeout_sec=0.1)
+            if not (future.done() and future.result() and future.result().success):
+                print(f"[PX4] Failed to set {name}")
+                return False
+            print(f"[PX4] {name} set ({integer if integer else real})")
+
+        print(f"[PX4] Altitude limit: {feet} ft ({meters:.2f} m)")
+        return True
+
+    def _clamp_alt(self, z):
+        """Clamp a requested z (meters) against the configured limit. Warns on clamp."""
+        if self._max_alt_m is None or z is None:
+            return z
+        if z > self._max_alt_m:
+            print(f"[PX4][WARN] Setpoint z={z:.2f}m exceeds limit {self._max_alt_m:.2f}m; clamping")
+            return self._max_alt_m
+        return z
 
     def arm_vehicle(self, timeout=20):
         """
@@ -193,6 +254,7 @@ class PX4Setters:
             print("[PX4] Not connected to MAVROS, cannot takeoff")
             return False
 
+        altitude = self._clamp_alt(float(altitude))
         print(f"[PX4] Taking off to {altitude}m...")
 
         try:
@@ -292,6 +354,7 @@ class PX4Setters:
             print("[PX4] Not connected to MAVROS, cannot navigate")
             return False
 
+        alt = self._clamp_alt(float(alt))
         print(f"[PX4] Navigating to ({lat:.6f}, {lon:.6f}, {alt}m)...")
 
         try:
@@ -328,7 +391,7 @@ class PX4Setters:
             msg.header.frame_id = "map"
             msg.pose.position.x = float(x)
             msg.pose.position.y = float(y)
-            msg.pose.position.z = float(z)
+            msg.pose.position.z = self._clamp_alt(float(z))
             self.setpoint_pub.publish(msg)
             return True
         except Exception as e:
