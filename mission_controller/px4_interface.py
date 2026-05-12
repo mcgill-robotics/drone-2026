@@ -12,8 +12,8 @@ import time
 import rclpy
 import subprocess
 
-from .px4_getters import PX4Getters
-from .px4_setters import PX4Setters
+from mission_controller.px4_getters import PX4Getters
+from mission_controller.px4_setters import PX4Setters
 
 
 class PX4Interface(PX4Setters, PX4Getters):
