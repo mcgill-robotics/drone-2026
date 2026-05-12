@@ -43,7 +43,7 @@ from mavros_msgs.msg import (
 )
 from mavros_msgs.srv import CommandBool, SetMode, CommandTOL, CommandHome, ParamSet
 from sensor_msgs.msg import BatteryState, NavSatFix, Imu
-from mission_controller.types import Point
+from .types import Point
 
 
 class PX4Getters(Node):
