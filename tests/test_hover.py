@@ -114,11 +114,12 @@ class HoverTest:
 
             # Step 8: Hover for 3 seconds
             self.log("\n[TEST] Hovering for 3 seconds...")
-            time.sleep(3)
+            time.sleep(30)
             self.log("[TEST] ✓ Hover complete")
 
             # Step 9: Land
             self.log("\n[TEST] Landing...")
+            
             if not self.px4.land():
                 self.log("[TEST] Warning: Land command may have failed")
             self.log("[TEST] ✓ Landing initiated")
