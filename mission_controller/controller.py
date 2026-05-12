@@ -16,9 +16,9 @@ class MissionController:
     """Main mission controller FSM for drone operations. This is the second level
     of abstraction in the codebase, with Driver being the highest level."""
 
-    def __init__(self, mission_number, site_gps, mission_boundary, home_position, 
-                 num_laps=3, mission_strategy=None, building_entry_point=None, 
-                 building_exit_point=None):
+    def __init__(self, mission_number, site_gps, mission_boundary, home_position,
+                 num_laps=3, mission_strategy=None, building_entry_point=None,
+                 building_exit_point=None, max_alt_ft=50):
         """
         Initialize the mission controller
         
@@ -75,6 +75,8 @@ class MissionController:
         self.battery_level = 100.0
         self.current_location = home_position
         self.altitude = 0
+        self.max_alt_ft = max_alt_ft
+        self._alt_limit_set = False
         
         # Objectives
         self.objectives = []
@@ -153,6 +155,9 @@ class MissionController:
         self.current_mode = Mode.ASCEND
         autopilot = get_px4()
         if autopilot:
+            if not self._alt_limit_set:
+                autopilot.set_altitude_limit_ft(self.max_alt_ft)
+                self._alt_limit_set = True
             #50 is the altitude
             autopilot.takeoff(50, timeout=60)
         self.current_mode = Mode.AIRBORNE
