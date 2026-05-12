@@ -10,6 +10,7 @@ from .stubs import (
     goto_drone, boustrophedon_search,
     at_position, pad_has_extinguisher, drop_payload, inside_boundary
 )
+from oa_bridge.oa_core import NullAvoider
 
 
 class MissionController:
@@ -18,7 +19,7 @@ class MissionController:
 
     def __init__(self, mission_number, site_gps, mission_boundary, home_position,
                  num_laps=3, mission_strategy=None, building_entry_point=None,
-                 building_exit_point=None, max_alt_ft=50):
+                 building_exit_point=None, max_alt_ft=50, avoider=None):
         """
         Initialize the mission controller
         
@@ -80,6 +81,9 @@ class MissionController:
         
         # Objectives
         self.objectives = []
+
+        # Obstacle avoidance (no-op by default)
+        self.avoider = avoider if avoider is not None else NullAvoider()
 
 
     #Runs the mission depending on the type. they are defined below the run file
@@ -252,10 +256,26 @@ class MissionController:
             self.state = MissionState.RETURN_HOME
 
     def safe_goto(self, target, boundary):
-        """Navigate to target while respecting boundaries"""
+        """Navigate to target while respecting boundaries and obstacles.
+
+        If the avoider returns None, no safe path exists right now — hold
+        position and let the next FSM tick replan (e.g. after an operator
+        removes a no-fly zone).
+        """
         if not inside_boundary(target, boundary):
             raise Exception(f"Target {target} outside mission boundary!")
-        goto_drone(target)
+        waypoint = self.avoider.get_safe_waypoint(self.current_location, target, boundary)
+        if waypoint is None:
+            self.hover()
+            return
+        goto_drone(waypoint)
+
+    def hover(self):
+        """Hold the current position. Used when no safe waypoint is available."""
+        self.current_mode = Mode.HOVER
+        autopilot = get_px4()
+        if autopilot and hasattr(autopilot, "hold_current_position"):
+            autopilot.hold_current_position()
     
     def update_telemetry(self):
         """Update telemetry from autopilot"""

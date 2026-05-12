@@ -1,0 +1,29 @@
+# Sample static no-fly zones for Mission One.
+# Coordinates are WGS84 (lat, lon). Radii and buffers are in meters.
+#
+# Load with: yaml.safe_load(open("field_obstacles.example.yaml"))
+# then build CircleObstacle / PolygonObstacle from each entry and pass
+# to StaticObstacleAvoider(obstacles=[...], buffer_m=...).
+
+buffer_m: 5.0
+
+obstacles:
+  - type: circle
+    id: tree-north
+    lat: 45.50480
+    lon: -73.57210
+    radius_m: 4.0
+
+  - type: circle
+    id: tree-south
+    lat: 45.50420
+    lon: -73.57180
+    radius_m: 3.5
+
+  - type: polygon
+    id: barn
+    vertices:
+      - [45.50455, -73.57250]
+      - [45.50455, -73.57230]
+      - [45.50445, -73.57230]
+      - [45.50445, -73.57250]
