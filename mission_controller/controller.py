@@ -19,7 +19,7 @@ class MissionController:
 
     def __init__(self, mission_number, site_gps, mission_boundary, home_position,
                  num_laps=3, mission_strategy=None, building_entry_point=None,
-                 building_exit_point=None, max_alt_ft=50, avoider=None):
+                 building_exit_point=None, max_alt_ft=2, avoider=None):
         """
         Initialize the mission controller
         
