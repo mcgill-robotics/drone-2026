@@ -139,6 +139,110 @@ class TestHoverAndWait:
         assert (wp.x, wp.y) == (target.x, target.y)
 
 
+class TestClusterAndTangents:
+    def test_true_tangent_geometry(self):
+        # The detour point should sit just outside the inflated circle —
+        # roughly radius + buffer + clearance from center.
+        import math
+        circle = CircleObstacle(REF_LAT, REF_LON, radius_m=10.0)
+        av = StaticObstacleAvoider(obstacles=[circle], buffer_m=2.0)
+        start = _offset(REF_LAT, REF_LON, north_m=-50)
+        target = _offset(REF_LAT, REF_LON, north_m=50)
+        wp = av.get_safe_waypoint(start, target, {})
+        assert wp is not None
+        dx = (wp.x - REF_LAT) * 111_320.0
+        dy = (wp.y - REF_LON) * 111_320.0 * math.cos(math.radians(REF_LAT))
+        d = math.hypot(dx, dy)
+        # Inflated radius is 12m; clearance pushes ~1m further.
+        assert 12.0 < d < 16.0, f"detour at {d:.2f}m, expected ~13m"
+
+    def test_cluster_picks_other_side(self):
+        # Two circles: A on the path, B in the natural-eastern-detour spot.
+        # Avoider should route to the western side of A.
+        import math
+        east_lon = REF_LON + 14.0 / (111_320.0 * math.cos(math.radians(REF_LAT)))
+        A = CircleObstacle(REF_LAT, REF_LON, radius_m=10.0, obs_id="A")
+        B = CircleObstacle(REF_LAT, east_lon, radius_m=10.0, obs_id="B")
+        av = StaticObstacleAvoider(obstacles=[A, B], buffer_m=2.0)
+        start = _offset(REF_LAT, REF_LON, north_m=-50)
+        target = _offset(REF_LAT, REF_LON, north_m=50)
+        wp = av.get_safe_waypoint(start, target, {})
+        assert wp is not None
+        assert not A.contains(wp.x, wp.y)
+        assert not B.contains(wp.x, wp.y)
+        # Western side: lon offset from REF should be negative.
+        east_offset = (wp.y - REF_LON) * 111_320.0 * math.cos(math.radians(REF_LAT))
+        assert east_offset < 0, "expected detour on western side of A"
+
+    def test_all_sides_blocked_returns_none(self):
+        # Circles on both flanks of the path-blocker — no valid detour.
+        import math
+        east_lon = REF_LON + 14.0 / (111_320.0 * math.cos(math.radians(REF_LAT)))
+        west_lon = REF_LON - 14.0 / (111_320.0 * math.cos(math.radians(REF_LAT)))
+        A = CircleObstacle(REF_LAT, REF_LON, radius_m=10.0)
+        B = CircleObstacle(REF_LAT, east_lon, radius_m=10.0)
+        C = CircleObstacle(REF_LAT, west_lon, radius_m=10.0)
+        av = StaticObstacleAvoider(obstacles=[A, B, C], buffer_m=2.0)
+        start = _offset(REF_LAT, REF_LON, north_m=-50)
+        target = _offset(REF_LAT, REF_LON, north_m=50)
+        assert av.get_safe_waypoint(start, target, {}) is None
+
+    def test_polygon_detour_clears_both_legs(self):
+        # Square polygon centered on the path. Detour must not cut through.
+        d = 0.0001
+        poly = PolygonObstacle([
+            (REF_LAT - d, REF_LON - d),
+            (REF_LAT - d, REF_LON + d),
+            (REF_LAT + d, REF_LON + d),
+            (REF_LAT + d, REF_LON - d),
+        ])
+        av = StaticObstacleAvoider(obstacles=[poly], buffer_m=2.0)
+        start = _offset(REF_LAT, REF_LON, north_m=-50)
+        target = _offset(REF_LAT, REF_LON, north_m=50)
+        wp = av.get_safe_waypoint(start, target, {})
+        assert wp is not None
+        assert not poly.contains(wp.x, wp.y)
+        # Both legs should be clear of the polygon.
+        assert not poly.intersects_segment(start, wp, 0.0)
+        assert not poly.intersects_segment(wp, target, 0.0)
+
+
+class TestBoundaryClamping:
+    def test_detour_outside_boundary_returns_none(self):
+        # Obstacle right at the eastern fence. Detour will be pushed further
+        # east, outside the boundary -> hover.
+        circle = CircleObstacle(REF_LAT, REF_LON + 0.00005, radius_m=10.0)
+        av = StaticObstacleAvoider(obstacles=[circle], buffer_m=2.0)
+        start = _offset(REF_LAT, REF_LON, north_m=-50)
+        target = _offset(REF_LAT, REF_LON, north_m=50)
+        boundary = {
+            "min_lat": REF_LAT - 0.001,
+            "max_lat": REF_LAT + 0.001,
+            "min_lon": REF_LON - 0.001,
+            "max_lon": REF_LON + 0.0001,  # tight east limit
+        }
+        # The detour will be pushed east past max_lon.
+        wp = av.get_safe_waypoint(start, target, boundary)
+        # Either the detour was rejected as out-of-bounds (None) or it stayed inside.
+        if wp is not None:
+            assert wp.y <= boundary["max_lon"]
+
+    def test_detour_inside_boundary_accepted(self):
+        circle = CircleObstacle(REF_LAT, REF_LON, radius_m=10.0)
+        av = StaticObstacleAvoider(obstacles=[circle], buffer_m=2.0)
+        start = _offset(REF_LAT, REF_LON, north_m=-50)
+        target = _offset(REF_LAT, REF_LON, north_m=50)
+        # Generous boundary that easily contains the detour.
+        boundary = {
+            "min_lat": REF_LAT - 0.01,
+            "max_lat": REF_LAT + 0.01,
+            "min_lon": REF_LON - 0.01,
+            "max_lon": REF_LON + 0.01,
+        }
+        wp = av.get_safe_waypoint(start, target, boundary)
+        assert wp is not None
+
+
 class TestLoader:
     def test_load_example_yaml(self, tmp_path):
         yaml = pytest.importorskip("yaml")

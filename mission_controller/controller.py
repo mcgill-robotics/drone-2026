@@ -3,7 +3,7 @@ Main mission controller implementing FSM state machine
 Core logic for managing drone mission execution
 """
 import time
-from .types import MissionState, Mode, MissionType
+from .types import MissionState, Mode, MissionType, Point
 from .strategies import MissionOne, MissionTwo
 from .px4_interface import get_px4
 from .stubs import (
@@ -278,8 +278,27 @@ class MissionController:
             autopilot.hold_current_position()
     
     def update_telemetry(self):
-        """Update telemetry from autopilot"""
-        pass
+        """Pull current GPS location and battery from PX4.
+
+        Required for obstacle avoidance — without this, `current_location`
+        would remain pinned to `home_position` and the avoider would see
+        the drone as stationary at home.
+        """
+        autopilot = get_px4()
+        if not autopilot:
+            return
+
+        gps = autopilot.get_gps_location() if hasattr(autopilot, "get_gps_location") else None
+        if gps and gps.get("latitude") is not None:
+            self.current_location = Point(
+                gps["latitude"], gps["longitude"], gps.get("altitude", 0)
+            )
+            self.altitude = gps.get("altitude", self.altitude)
+
+        if hasattr(autopilot, "get_battery_status"):
+            batt = autopilot.get_battery_status()
+            if batt and batt.get("percentage") is not None:
+                self.battery_level = batt["percentage"]
     
     def add_objective(self, objective):
         """Add objective"""

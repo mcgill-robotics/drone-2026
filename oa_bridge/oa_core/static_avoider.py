@@ -16,6 +16,7 @@ from .avoider import Avoider
 
 
 _LAT_M_PER_DEG = 111_320.0
+_CLEARANCE_M = 1.0  # extra outward push on tangent points
 
 
 def _lon_m_per_deg(lat_deg):
@@ -41,6 +42,19 @@ def _make_like(template, lat, lon, alt):
             out["alt"] = alt
         return out
     return Point(lat, lon, alt)
+
+
+def _inside_boundary(lat, lon, boundary):
+    """Mirror of mission_controller.stubs.inside_boundary, in lat/lon.
+
+    Returns True if no boundary is given (callers may pass an empty dict).
+    """
+    if not isinstance(boundary, dict) or not boundary:
+        return True
+    return (
+        boundary.get("min_lat", -90) <= lat <= boundary.get("max_lat", 90)
+        and boundary.get("min_lon", -180) <= lon <= boundary.get("max_lon", 180)
+    )
 
 
 def _to_local_m(lat, lon, ref_lat, ref_lon):
@@ -76,8 +90,6 @@ class CircleObstacle:
         ax, ay = _to_local_m(a_lat, a_lon, self.lat, self.lon)
         bx, by = _to_local_m(b_lat, b_lon, self.lat, self.lon)
         r = self.radius_m + buffer_m
-
-        # Distance from origin (the obstacle center, in local frame) to segment ab.
         dx, dy = bx - ax, by - ay
         seg_len_sq = dx * dx + dy * dy
         if seg_len_sq == 0:
@@ -86,42 +98,44 @@ class CircleObstacle:
         cx, cy = ax + t * dx, ay + t * dy
         return math.hypot(cx, cy) <= r
 
-    def tangent_waypoint(self, current, target, buffer_m=0.0):
-        """Return a detour point that goes around this circle.
+    def tangent_candidates(self, current, target, buffer_m=0.0):
+        """Return up to two true external tangent-point waypoints.
 
-        Picks the side of the obstacle closer to a straight line from
-        current → target. Result is offset by radius + buffer + small
-        clearance, in lat/lon shaped like `target`.
+        Geometry: from external point P (current), the two tangent lines to
+        a circle of inflated radius r touch the circle at points T1, T2
+        symmetric across the line P→O (O = center). Each tangent point is
+        pushed outward by a small clearance so the resulting segment
+        P → T grazes — not enters — the inflated obstacle. Returned list is
+        sorted so the candidate closer to `target` comes first.
         """
         c_lat, c_lon, _ = _coords(current)
         t_lat, t_lon, alt = _coords(target)
-
-        # Work in local meters around the obstacle center.
         cx, cy = _to_local_m(c_lat, c_lon, self.lat, self.lon)
         tx, ty = _to_local_m(t_lat, t_lon, self.lat, self.lon)
 
-        # Unit vector along current→target.
-        dx, dy = tx - cx, ty - cy
-        L = math.hypot(dx, dy) or 1.0
-        ux, uy = dx / L, dy / L
-        # Perpendicular (two options); pick the one farther from origin
-        # projection so we go around, not through.
-        # Projection of -current onto u gives closest approach along the line.
-        proj = -(cx * ux + cy * uy)
-        closest_x = cx + proj * ux
-        closest_y = cy + proj * uy
-        side = math.hypot(closest_x, closest_y)
-        # Detour distance: push to the side by radius + buffer + 2m clearance.
-        push = self.radius_m + buffer_m + 2.0
-        if side < 1e-6:
-            # Line goes straight through center; pick an arbitrary perpendicular.
-            px, py = -uy, ux
-        else:
-            px, py = closest_x / side, closest_y / side
-        wx = closest_x + px * push
-        wy = closest_y + py * push
-        lat, lon = _from_local_m(wx, wy, self.lat, self.lon)
-        return _make_like(target, lat, lon, alt)
+        r = self.radius_m + buffer_m
+        d2 = cx * cx + cy * cy
+        if d2 <= r * r:
+            # Current is inside inflated circle — no external tangent exists.
+            return []
+
+        # Angle from O to current; α is the angle between O→current and O→T.
+        base = math.atan2(cy, cx)
+        alpha = math.acos(r / math.sqrt(d2))
+
+        out = []
+        for sign in (+1, -1):
+            theta = base + sign * alpha
+            # Tangent point on circle, then pushed outward by clearance.
+            r_out = r + _CLEARANCE_M
+            wx = r_out * math.cos(theta)
+            wy = r_out * math.sin(theta)
+            lat, lon = _from_local_m(wx, wy, self.lat, self.lon)
+            out.append((wx, wy, lat, lon))
+
+        # Sort by distance from candidate to target (in local frame).
+        out.sort(key=lambda w: math.hypot(w[0] - tx, w[1] - ty))
+        return [_make_like(target, lat, lon, alt) for _, _, lat, lon in out]
 
     def to_dict(self):
         return {
@@ -141,7 +155,6 @@ class PolygonObstacle:
             raise ValueError("Polygon needs at least 3 vertices")
         self.vertices = list(vertices)
         self.id = obs_id or str(uuid.uuid4())
-        # Reference point for local-meter conversion = centroid.
         self._ref_lat = sum(v[0] for v in vertices) / len(vertices)
         self._ref_lon = sum(v[1] for v in vertices) / len(vertices)
         self._local = [
@@ -160,10 +173,8 @@ class PolygonObstacle:
         b_lat, b_lon, _ = _coords(b)
         ax, ay = _to_local_m(a_lat, a_lon, self._ref_lat, self._ref_lon)
         bx, by = _to_local_m(b_lat, b_lon, self._ref_lat, self._ref_lon)
-        # If either endpoint is inside (with buffer), it intersects.
         if self._point_in_poly(ax, ay) or self._point_in_poly(bx, by):
             return True
-        # Otherwise check segment vs each edge, with buffer.
         for i in range(len(self._local)):
             x1, y1 = self._local[i]
             x2, y2 = self._local[(i + 1) % len(self._local)]
@@ -171,30 +182,55 @@ class PolygonObstacle:
                 return True
         return False
 
-    def tangent_waypoint(self, current, target, buffer_m=0.0):
-        """Detour: head toward the polygon vertex farthest off the direct line."""
+    def tangent_candidates(self, current, target, buffer_m=0.0):
+        """Return up to two detour candidates straddling the polygon.
+
+        Strategy: displace the polygon centroid perpendicular to the
+        current→target line by (max perpendicular extent of any vertex) +
+        buffer + clearance. Two candidates — one each side — guaranteed to
+        sit outside the polygon. Vertex-corner detours don't work for
+        convex polygons sitting on the path: legs through corners still
+        cut through adjacent edges.
+
+        Candidates that aren't visible from current (segment cuts the
+        polygon) are filtered out. The list is ordered with the side
+        closer to the original path first.
+        """
         c_lat, c_lon, _ = _coords(current)
         t_lat, t_lon, alt = _coords(target)
         cx, cy = _to_local_m(c_lat, c_lon, self._ref_lat, self._ref_lon)
         tx, ty = _to_local_m(t_lat, t_lon, self._ref_lat, self._ref_lon)
+
         dx, dy = tx - cx, ty - cy
         L = math.hypot(dx, dy) or 1.0
-        # Pick vertex with greatest perpendicular distance from the c→t line.
-        best = None
-        best_d = -1.0
-        for vx, vy in self._local:
-            perp = abs((vx - cx) * dy - (vy - cy) * dx) / L
-            if perp > best_d:
-                best_d = perp
-                best = (vx, vy)
-        # Push slightly outward from polygon centroid (origin in local frame).
-        vx, vy = best
-        norm = math.hypot(vx, vy) or 1.0
-        push = buffer_m + 2.0
-        wx = vx + (vx / norm) * push
-        wy = vy + (vy / norm) * push
-        lat, lon = _from_local_m(wx, wy, self._ref_lat, self._ref_lon)
-        return _make_like(target, lat, lon, alt)
+        ux, uy = dx / L, dy / L
+        # Perpendicular unit vector (rotate +90°).
+        px_unit, py_unit = -uy, ux
+
+        # Max perpendicular extent of polygon vertices (centroid is at origin).
+        max_perp = max(abs(vx * px_unit + vy * py_unit) for vx, vy in self._local)
+        offset = max_perp + buffer_m + _CLEARANCE_M
+
+        # Polygon centroid projected onto current→target line so the
+        # detour is alongside the obstacle, not in front or behind.
+        proj = (-cx) * ux + (-cy) * uy
+        anchor_x = cx + proj * ux
+        anchor_y = cy + proj * uy
+
+        out = []
+        for sign in (+1, -1):
+            wx = anchor_x + sign * offset * px_unit
+            wy = anchor_y + sign * offset * py_unit
+            lat, lon = _from_local_m(wx, wy, self._ref_lat, self._ref_lon)
+            wp = _make_like(target, lat, lon, alt)
+            # Reject if either leg cuts the polygon (buffer=0; clearance is
+            # already in `offset`).
+            if self.intersects_segment(current, wp, 0.0):
+                continue
+            if self.intersects_segment(wp, target, 0.0):
+                continue
+            out.append(wp)
+        return out
 
     def _point_in_poly(self, x, y):
         inside = False
@@ -237,7 +273,6 @@ def _point_segment_dist(px, py, x1, y1, x2, y2):
 
 
 def _segments_close(ax, ay, bx, by, x1, y1, x2, y2, buffer_m):
-    """True if segment ab and segment (x1,y1)-(x2,y2) come within buffer_m."""
     if _segments_intersect(ax, ay, bx, by, x1, y1, x2, y2):
         return True
     if buffer_m <= 0:
@@ -262,9 +297,11 @@ def _segments_intersect(ax, ay, bx, by, cx, cy, dx, dy):
 class StaticObstacleAvoider(Avoider):
     """Avoider backed by a list of known static obstacles.
 
-    Obstacles are checked against the straight line from current → target.
-    On a hit, returns a tangent/detour waypoint that goes around the
-    closest blocking obstacle. The FSM replans on the next tick.
+    On each call, walks blockers nearest-first; each blocker proposes one
+    or more detour candidates; the first candidate that passes validation
+    (outside every obstacle, inside the boundary, leg from current → wp
+    clears the blocker we're avoiding) wins. The FSM replans on the next
+    tick, so a sub-waypoint is enough — no global plan is built.
     """
 
     def __init__(self, obstacles=None, buffer_m=5.0):
@@ -299,9 +336,6 @@ class StaticObstacleAvoider(Avoider):
             obstacles = list(self._obstacles)
 
         c_lat, c_lon, _ = _coords(current)
-
-        # If the drone is currently inside any obstacle, no safe detour exists —
-        # hover and wait for the obstacle list to change.
         if any(o.contains(c_lat, c_lon, buffer_m=0.0) for o in obstacles):
             return None
 
@@ -311,20 +345,38 @@ class StaticObstacleAvoider(Avoider):
         if not blockers:
             return target
 
-        def dist_from_current(o):
-            if isinstance(o, CircleObstacle):
-                dx, dy = _to_local_m(c_lat, c_lon, o.lat, o.lon)
-                return math.hypot(dx, dy)
-            cx, cy = _to_local_m(c_lat, c_lon, o._ref_lat, o._ref_lon)
-            return o._dist_to_edges(cx, cy)
+        # Walk blockers nearest-first, collecting candidates from each. The
+        # first candidate that validates against all obstacles + boundary
+        # wins. This handles clusters: if going around blocker A drops us
+        # inside blocker B, we try A's other side, then move on to B.
+        blockers.sort(key=lambda o: self._dist_from(c_lat, c_lon, o))
 
-        nearest = min(blockers, key=dist_from_current)
-        candidate = nearest.tangent_waypoint(current, target, self._buffer)
+        for blocker in blockers:
+            for candidate in blocker.tangent_candidates(current, target, self._buffer):
+                if self._validate(candidate, blocker, obstacles, boundary, current):
+                    return candidate
 
-        # If the candidate detour itself sits inside another obstacle, give up
-        # and hover — replanning next tick may find an escape.
-        c_lat2, c_lon2, _ = _coords(candidate)
-        if any(o.contains(c_lat2, c_lon2, buffer_m=0.0) for o in obstacles):
-            return None
+        return None
 
-        return candidate
+    def _dist_from(self, lat, lon, obstacle):
+        if isinstance(obstacle, CircleObstacle):
+            dx, dy = _to_local_m(lat, lon, obstacle.lat, obstacle.lon)
+            return math.hypot(dx, dy)
+        cx, cy = _to_local_m(lat, lon, obstacle._ref_lat, obstacle._ref_lon)
+        return obstacle._dist_to_edges(cx, cy)
+
+    def _validate(self, candidate, blocker, obstacles, boundary, current):
+        c_lat, c_lon, _ = _coords(candidate)
+        if not _inside_boundary(c_lat, c_lon, boundary):
+            return False
+        # Candidate must not sit inside any obstacle (no buffer here — the
+        # tangent already includes one).
+        if any(o.contains(c_lat, c_lon, buffer_m=0.0) for o in obstacles):
+            return False
+        # And the leg from current → candidate must not cut through the
+        # very obstacle we're trying to avoid (would mean we picked the
+        # wrong side). Use buffer=0 — clearance is baked into the candidate,
+        # and the inflated-buffer check would falsely reject grazing legs.
+        if blocker.intersects_segment(current, candidate, 0.0):
+            return False
+        return True
