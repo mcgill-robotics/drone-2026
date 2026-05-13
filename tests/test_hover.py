@@ -68,20 +68,54 @@ class HoverTest:
                 return False
             self.log("[TEST] ✓ Connected to MAVROS")
 
-            # Step 2: Switch to OFFBOARD mode (without starting background stream yet)
+            # Step 2: Switch to OFFBOARD mode
             self.log("\n[TEST] Switching to OFFBOARD mode...")
             if not self.px4.start_offboard():
                 self.log("[TEST] Failed to switch to OFFBOARD mode")
                 return False
             self.log("[TEST] ✓ OFFBOARD mode active")
 
-            # Step 3: Wait for arming (manual or API)
+            # Step 3: Start background setpoint stream (BEFORE waiting for arm)
+            # This keeps setpoints flowing continuously while in OFFBOARD mode
+            self.log("\n[TEST] Starting background setpoint stream...")
+            if not self.px4.start_offboard_stream_background():
+                self.log("[TEST] Failed to start background stream")
+                return False
+            self.log("[TEST] ✓ Background stream started (50Hz)")
+
+            # Step 4: Wait for arming (manual or API)
             if self.manual_arm:
                 self.log("\n[TEST] Waiting for manual arm (60 seconds)...")
                 self.log("[TEST] Please arm the vehicle manually via RC transmitter")
                 
-                if not self.px4.wait_for_arm_with_heartbeat(timeout=60, heartbeat_rate=10):
+                # Simple polling approach with detailed logging
+                start_arm = time.time()
+                arm_timeout = 60
+                poll_interval = 0.5
+                
+                while (time.time() - start_arm) < arm_timeout:
+                    rclpy.spin_once(self.px4, timeout_sec=0.1)
+                    
+                    is_armed = self.px4.is_armed()
+                    current_state = self.px4.current_state
+                    
+                    if is_armed:
+                        self.log("[TEST] ✓ Vehicle armed!")
+                        break
+                    
+                    elapsed = time.time() - start_arm
+                    if elapsed % 5 < 0.5:  # Log every ~5 seconds
+                        self.log(f"[TEST] Waiting... {int(arm_timeout - elapsed)}s remaining")
+                        self.log(f"[TEST]   is_armed()={is_armed}, current_state={current_state}")
+                        if current_state:
+                            self.log(f"[TEST]   current_state.armed={current_state.armed}, current_state.connected={current_state.connected}")
+                    
+                    time.sleep(poll_interval)
+                else:
                     self.log("[TEST] Arm timeout - vehicle was not armed")
+                    self.log(f"[TEST]   Final state: is_armed()={self.px4.is_armed()}")
+                    if self.px4.current_state:
+                        self.log(f"[TEST]   current_state.armed={self.px4.current_state.armed}")
                     return False
             else:
                 self.log("\n[TEST] Arming vehicle via API...")
@@ -89,13 +123,6 @@ class HoverTest:
                     self.log("[TEST] API arm failed")
                     return False
                 self.log("[TEST] ✓ Vehicle armed via API")
-
-            # Step 4: Start background setpoint stream (now that we're armed)
-            self.log("\n[TEST] Starting background setpoint stream...")
-            if not self.px4.start_offboard_stream_background():
-                self.log("[TEST] Failed to start background stream")
-                return False
-            self.log("[TEST] ✓ Background stream started (50Hz)")
 
             # Step 5: Fly upward at 0.5 m/s for 3 seconds
             self.log("\n[TEST] Sending upward velocity command (0.5 m/s up)...")
