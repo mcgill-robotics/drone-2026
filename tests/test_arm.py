@@ -75,10 +75,25 @@ class ArmTest:
             return False
         self.log("Connected to MAVROS")
 
-        # Step 2: Switch to OFFBOARD mode
+        # Step 2a: Start background heartbeat BEFORE the mode change so
+        # OFFBOARD setpoints are already flowing — otherwise diagnostics +
+        # arm-wait below will gap longer than COM_OF_LOSS_T (~1s) and PX4
+        # drops OFFBOARD into failsafe.
+        self.log("\nStarting background heartbeat stream...")
+        if not self.px4.start_offboard_stream_background():
+            self.log("Failed to start heartbeat stream")
+            return False
+
+        # Step 2b: Switch to OFFBOARD mode
         self.log("\nSwitching to OFFBOARD mode...")
         if not self.px4.start_offboard():
             self.log("Failed to switch to OFFBOARD mode")
+            self.px4.stop_offboard_stream_background()
+            return False
+        # Verify the FCU actually entered OFFBOARD (mode_sent != mode_active).
+        if not self.px4.wait_for_mode("OFFBOARD", timeout=5):
+            self.log("OFFBOARD mode_sent succeeded but mode never became active")
+            self.px4.stop_offboard_stream_background()
             return False
         self.log("OFFBOARD mode active")
 
@@ -101,30 +116,38 @@ class ArmTest:
             self.log(f"Home Set: No")
         self.log("==========================\n")
 
-        # Step 4: Wait for arm or arm programmatically
+        # Step 4: Wait for arm or arm programmatically. Heartbeat is already
+        # running in the background, so we just poll arm state.
         if self.manual_arm:
             self.log("\nWaiting for manual arm (60 seconds)...")
-            self.log("Please arm the vehicle manually via RC transmitter")
-            
-            if not self.px4.wait_for_arm_with_heartbeat(timeout=60, heartbeat_rate=10):
-                self.log("Arm timeout - vehicle was not armed")
+            self.log("Flip the RC arm switch to arm the vehicle.")
+            start = time.time()
+            while time.time() - start < 60:
+                if self.px4.is_armed():
+                    self.log(f"✓ Vehicle armed in {time.time() - start:.1f}s")
+                    break
+                # Re-check OFFBOARD mode hasn't fallen out (e.g., RC link
+                # dropped). If it did, fail loudly rather than arm into a
+                # surprise mode.
+                state = self.px4.current_state
+                if state and state.mode != "OFFBOARD":
+                    self.log(f"Mode dropped from OFFBOARD to {state.mode} — aborting")
+                    self.px4.stop_offboard_stream_background()
+                    return False
+                time.sleep(0.2)
+            else:
+                self.log("Arm timeout — vehicle was not armed")
+                self.px4.stop_offboard_stream_background()
                 return False
         else:
             self.log("\nArming vehicle via API...")
             if not self.px4.arm_vehicle(timeout=20):
                 self.log("API arm failed")
+                self.px4.stop_offboard_stream_background()
                 return False
             self.log("✓ Vehicle armed via API")
 
-        # Step 5: Start background heartbeat thread for flight
-        # Now that we're armed, start the background thread for mission flight
-        self.log("\nStarting background heartbeat thread for flight...")
-        if not self.px4.start_offboard_stream_background():
-            self.log("Warning: Failed to start background stream")
-            # Don't fail here - the vehicle is already armed
-        self.log("Background stream started")
-
-        # Step 6: Stop heartbeat thread
+        # Step 5: Stop heartbeat thread
         self.log("\nStopping background heartbeat thread...")
         self.px4.stop_offboard_stream_background()
         self.log("Heartbeat thread stopped")

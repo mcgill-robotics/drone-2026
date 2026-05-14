@@ -242,6 +242,24 @@ class PX4Setters:
             traceback.print_exc()
             return False
 
+    def wait_for_mode(self, mode_name, timeout=5):
+        """Poll until current_state.mode equals mode_name, or timeout.
+
+        `change_mode` only confirms the request was accepted (`mode_sent`),
+        not that PX4 actually entered the mode. PX4 can reject a mode
+        transition after accepting the request (e.g. OFFBOARD without
+        enough setpoints flowing). Use this after `change_mode` to verify.
+        """
+        start = time.time()
+        while time.time() - start < timeout:
+            rclpy.spin_once(self, timeout_sec=0.1)
+            if self.current_state and self.current_state.mode == mode_name:
+                return True
+            time.sleep(0.1)
+        actual = self.current_state.mode if self.current_state else "unknown"
+        print(f"[PX4] wait_for_mode: wanted {mode_name}, got {actual} after {timeout}s")
+        return False
+
     def takeoff(self, altitude, timeout=60):
         """
         Perform takeoff to specified altitude
