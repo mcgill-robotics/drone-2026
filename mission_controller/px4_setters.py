@@ -660,6 +660,8 @@ class PX4Setters:
             # Publish heartbeat to maintain OFFBOARD mode
             self.send_velocity_setpoint(0.0, 0.0, 0.0, 0.0)
             heartbeat_count += 1
+
+            rclpy.spin_once(self, timeout_sec=0.1)
             
             # Check if armed
             if self.is_armed():
