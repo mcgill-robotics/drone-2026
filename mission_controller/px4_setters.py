@@ -674,8 +674,7 @@ class PX4Setters:
             if remaining > 0 and remaining % 10 == 0:
                 print(f"[PX4] Waiting... {remaining}s remaining ({heartbeat_count} heartbeats sent)")
             
-            # Sleep for heartbeat interval
-            time.sleep(heartbeat_interval)
+    
         
         print(f"[PX4] ✗ Arm timeout after {timeout}s ({heartbeat_count} heartbeats)")
         return False
