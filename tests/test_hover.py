@@ -220,7 +220,7 @@ def main():
     # Determine connection method
     sitl = args.sitl
     port = args.port
-    manual_arm = not args.api  # Default to manual, unless --api flag is set
+    manual_arm = False  # Default to manual, unless --api flag is set
 
     if args.hardware:
         port = "/dev/ttyUSB0"
