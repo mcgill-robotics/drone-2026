@@ -1,7 +1,7 @@
 import rclpy
 import time
-from .px4_interface import init_px4, boot_px4, stop_px4
-from .px4_getters import get_jetson_ip
+from px4_interface import init_px4, boot_px4, stop_px4
+from px4_getters import get_jetson_ip
 
 
 def print_jetson_info():
