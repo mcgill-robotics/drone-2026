@@ -16,6 +16,7 @@ It assumes the main interface object already created:
 import time
 import rclpy
 import threading
+import math
 from geometry_msgs.msg import PoseStamped, TwistStamped
 from mavros_msgs.srv import CommandBool, SetMode, CommandTOL, ParamSet
 from mavros_msgs.msg import ParamValue
@@ -26,44 +27,20 @@ DEFAULT_MAX_ALT_FT = 400  # FAA Part 107 ceiling
 
 
 class PX4Setters:
-    """
-    Mixin containing control / setter APIs.
-
-    This class assumes the object already has:
-    - connected
-    - current_position
-    - arming_client
-    - set_mode_client
-    - takeoff_client
-    - land_client
-    - setpoint_pub
-    - velocity_setpoint_pub
-    - get_clock()
-    - is_armed()
-    """
-
     def __init__(self, **kwargs):
         """Initialize threads and state, then pass control to parent class"""
         self._stream_thread = None
         self._stream_running = False
         self._stream_lock = threading.Lock()
         self._last_user_publish_time = 0  # Track when user last published a command
+        self._last_command_message = None  # Track last published message (PoseStamped or TwistStamped)
+        self._last_command_publisher = None  # Track which publisher to use for heartbeat
 
         # Altitude limit (software-side clamp). None = no limit until set.
-        # Firmware fence is set independently via set_altitude_limit_ft().
         self._max_alt_m = None
-
-        # Call parent class __init__ (PX4Getters -> Node)
         super().__init__(**kwargs)
 
     def set_altitude_limit_ft(self, feet=DEFAULT_MAX_ALT_FT, timeout=10):
-        """
-        Configure altitude limit in feet. Sets the ArduPilot fence on the FCU
-        AND records the limit locally for software-side setpoint clamping.
-
-        Call once after connect, before takeoff. ArduPilot params persist on
-        the FCU, so re-calling per-command is unnecessary.
-        """
         if not self.connected:
             print("[PX4] Not connected, cannot set altitude limit")
             return False
@@ -109,12 +86,7 @@ class PX4Setters:
         return z
 
     def arm_vehicle(self, timeout=20):
-        """
-        Arm the vehicle (allow motors to spin)
-
-        Args:
-            timeout: Timeout in seconds
-        """
+        #Arm the vehicle (allow motors to spin)
         if not self.connected:
             print("[PX4] Not connected to MAVROS, cannot arm")
             return False
@@ -136,7 +108,7 @@ class PX4Setters:
                 #we spin until we get a response
                 rclpy.spin_once(self, timeout_sec=0.1)
                 time.sleep(0.1)
-            #future.done() checks if smt received, .result() checks if something is in, .success is state
+            #future.done() checks if smt received, .result() checks if something is inside, .success is state
             if future.done() and future.result() and future.result().success:
                 print("[PX4] Vehicle armed successfully")
                 return True
@@ -148,7 +120,10 @@ class PX4Setters:
             return False
 
     def disarm_vehicle(self, timeout=20):
-        """Disarm the vehicle (prevent motors from spinning)"""
+        """
+        Disarm the vehicle (prevent motors from spinning)
+        we will probably never use this
+        """
         if not self.connected:
             print("[PX4] Not connected to MAVROS, cannot disarm")
             return False
@@ -182,22 +157,16 @@ class PX4Setters:
     def change_mode(self, mode_name, timeout=30):
         """
         Change vehicle flight mode
-
-        Args:
-            mode_name: Mode name (e.g., "GUIDED", "AUTO", "LAND", "RTL", "OFFBOARD")
-            timeout: Timeout in seconds
+        mode_name: Mode name (e.g., "GUIDED", "AUTO", "LAND", "RTL", "OFFBOARD")
         """
         if not self.connected:
             print("[PX4] Not connected to MAVROS, cannot change mode")
             return False
 
         # Check if service is available
-        print(f"[PX4] Checking if set_mode service is available...")
         if not self.set_mode_client.wait_for_service(timeout_sec=5):
             print("[PX4] Service /set_mode NOT available after 5 seconds")
-            print("[PX4] Make sure MAVROS is running: ros2 launch mavros px4.launch fcu_url:=...")
             return False
-        print("[PX4] ✓ Service is available")
 
         print(f"[PX4] Changing mode to {mode_name}...")
         try:
@@ -229,7 +198,7 @@ class PX4Setters:
             
             result = future.result()
             if result and result.mode_sent:
-                print(f"[PX4] ✓ Mode changed to {mode_name}")
+                print(f"[PX4] Mode changed to {mode_name}")
                 return True
             else:
                 print(f"[PX4] Mode change REJECTED by PX4 (mode_sent=False)")
@@ -242,69 +211,55 @@ class PX4Setters:
             traceback.print_exc()
             return False
 
-    def wait_for_mode(self, mode_name, timeout=5):
-        """Poll until current_state.mode equals mode_name, or timeout.
-
-        `change_mode` only confirms the request was accepted (`mode_sent`),
-        not that PX4 actually entered the mode. PX4 can reject a mode
-        transition after accepting the request (e.g. OFFBOARD without
-        enough setpoints flowing). Use this after `change_mode` to verify.
-        """
-        start = time.time()
-        while time.time() - start < timeout:
-            rclpy.spin_once(self, timeout_sec=0.1)
-            if self.current_state and self.current_state.mode == mode_name:
-                return True
-            time.sleep(0.1)
-        actual = self.current_state.mode if self.current_state else "unknown"
-        print(f"[PX4] wait_for_mode: wanted {mode_name}, got {actual} after {timeout}s")
-        return False
-
     def takeoff(self, altitude, timeout=60):
         """
-        Perform takeoff to specified altitude
-
-        Args:
-            altitude: Target altitude in meters
-            timeout: Timeout in seconds
+        Perform takeoff to specified altitude using position setpoint in OFFBOARD mode.
+        
+        Sends a position setpoint with the target altitude. The heartbeat will continuously
+        republish this position, maintaining the climb until the target altitude is reached.
         """
         if not self.connected:
             print("[PX4] Not connected to MAVROS, cannot takeoff")
             return False
 
         altitude = self._clamp_alt(float(altitude))
-        print(f"[PX4] Taking off to {altitude}m...")
-
+        
+        # Get current position
+        if not self.current_position:
+            print("[PX4] Cannot takeoff: current position unavailable")
+            return False
+        
+        current = self.current_position.pose.position
+        target_alt = current.z + altitude
+        
+        print(f"[PX4] Taking off to {target_alt:.2f}m (current: {current.z:.2f}m, climbing {altitude:.2f}m)...")
+        
         try:
             # Arm if not already armed
             if not self.is_armed():
                 if not self.arm_vehicle():
                     return False
-
-            # Some setups use GUIDED, some use OFFBOARD.
-            # Keep this comment because it is useful during debugging.
-            if not self.change_mode("GUIDED"):
-                print("[PX4][WARN] GUIDED mode failed. If using PX4, you may need OFFBOARD instead.")
+            
+            # Send position setpoint (heartbeat will maintain it)
+            #the send position is actually absolute, so even if it gets called infinitely it will
+            #stay at 5m up
+            if not self.send_position_setpoint(current.x, current.y, target_alt):
+                print("[PX4] Failed to send takeoff position setpoint")
                 return False
-
-            req = CommandTOL.Request() # takeoff and land request
-            req.altitude = float(altitude)
-
-            future = self.takeoff_client.call_async(req)
-
+            
+            # Wait until target altitude is reached
             start = time.time()
-            while not future.done() and (time.time() - start) < timeout:
+            while (time.time() - start) < timeout:
                 rclpy.spin_once(self, timeout_sec=0.1)
-                #here, we dont need to check if we received a message, because
-                #the drone checks for altitude, so its actually already robust
+                
                 if self.current_position:
                     current_alt = self.current_position.pose.position.z
-                    if current_alt >= (altitude * 0.95):  # 95% of target
-                        print(f"[PX4] Takeoff complete, reached {current_alt:.1f}m")
+                    if current_alt >= (target_alt * 0.95):  # 95% of target
+                        print(f"[PX4] Takeoff complete, reached {current_alt:.2f}m")
                         return True
-
+                
                 time.sleep(0.5)
-
+            
             print("[PX4] Takeoff timeout")
             return False
         except Exception as e:
@@ -313,35 +268,45 @@ class PX4Setters:
 
     def land(self, timeout=60):
         """
-        Perform landing sequence
-
-        Args:
-            timeout: Timeout in seconds
+        Perform landing sequence using position setpoint in OFFBOARD mode.
+        
+        Sends a position setpoint with altitude 0 (ground level) at current x, y location.
+        The heartbeat will continuously republish this position, maintaining the descent
+        until the drone reaches the ground.
         """
         if not self.connected:
             print("[PX4] Not connected to MAVROS, cannot land")
             return False
 
-        print("[PX4] Landing...")
-
+        # Get current position
+        if not self.current_position:
+            print("[PX4] Cannot land: current position unavailable")
+            return False
+        
+        current = self.current_position.pose.position
+        target_alt = 0.0  # Land at ground level
+        
+        print(f"[PX4] Landing to ground (current: {current.z:.2f}m)...")
+        
         try:
-            req = CommandTOL.Request()
-            req.altitude = 0  # Land at current location
-
-            future = self.land_client.call_async(req)
-
+            # Send position setpoint at ground level (heartbeat will maintain it)
+            if not self.send_position_setpoint(current.x, current.y, target_alt):
+                print("[PX4] Failed to send landing position setpoint")
+                return False
+            
+            # Wait until target altitude is reached
             start = time.time()
-            while not future.done() and (time.time() - start) < timeout:
+            while (time.time() - start) < timeout:
                 rclpy.spin_once(self, timeout_sec=0.1)
-
+                
                 if self.current_position:
                     current_alt = self.current_position.pose.position.z
                     if current_alt < 0.1:  # Close to ground
-                        print("[PX4] Landing complete")
+                        print(f"[PX4] Landing complete, reached {current_alt:.2f}m")
                         return True
-
+                
                 time.sleep(0.5)
-
+            
             print("[PX4] Landing timeout")
             return False
         except Exception as e:
@@ -352,48 +317,8 @@ class PX4Setters:
     # Publisher-based control APIs
     # These do NOT use services.
     # They publish command messages continuously or on demand.
+    #OFFBOARD is stream based, not req/response, so we need these publishes
     # =========================================================
-
-    def goto_location(self, lat, lon, alt, timeout=60):
-        """
-        Navigate to a location using local setpoint publishing.
-
-        Args:
-            lat: Placeholder local x position
-            lon: Placeholder local y position
-            alt: Local z altitude in meters
-            timeout: Timeout in seconds
-
-        NOTE:
-        This currently publishes a local position setpoint.
-        It does NOT send a true GPS waypoint mission.
-        """
-        if not self.connected:
-            print("[PX4] Not connected to MAVROS, cannot navigate")
-            return False
-
-        alt = self._clamp_alt(float(alt))
-        print(f"[PX4] Navigating to ({lat:.6f}, {lon:.6f}, {alt}m)...")
-
-        try:
-            if not self.change_mode("GUIDED"):
-                print("[PX4][WARN] GUIDED mode failed. If using PX4, you may need OFFBOARD instead.")
-                return False
-
-            setpoint = PoseStamped()
-            setpoint.header.stamp = self.get_clock().now().to_msg() #set all the fields
-            setpoint.header.frame_id = "map"
-            setpoint.pose.position.x = lat
-            setpoint.pose.position.y = lon
-            setpoint.pose.position.z = alt
-
-            self.setpoint_pub.publish(setpoint)
-            print("[PX4] Waypoint sent")
-            return True
-        except Exception as e:
-            print(f"[PX4] Navigation failed: {str(e)}")
-            return False
-
     def send_position_setpoint(self, x, y, z):
         """
         Publish a local position setpoint.
@@ -402,14 +327,30 @@ class PX4Setters:
         This is a topic publish , not a service call. (messages vs services)
         In other words, the following functions below just send a command,
         but do not expect a response.
+        
+        When a background heartbeat is running, this setpoint is stored and
+        republished by the heartbeat thread at its frequency. This ensures the
+        position target is maintained without being overwritten by other messages.
         """
         try:
+            # Record that user just published (heartbeat will skip if recent)
+            self._last_user_publish_time = time.time()
+            
+            x_clamped = float(x)
+            y_clamped = float(y)
+            z_clamped = self._clamp_alt(float(z))
+            
             msg = PoseStamped()
             msg.header.stamp = self.get_clock().now().to_msg()
             msg.header.frame_id = "map"
-            msg.pose.position.x = float(x)
-            msg.pose.position.y = float(y)
-            msg.pose.position.z = self._clamp_alt(float(z))
+            msg.pose.position.x = x_clamped
+            msg.pose.position.y = y_clamped
+            msg.pose.position.z = z_clamped
+            
+            # Store message and publisher for heartbeat to republish
+            self._last_command_message = msg
+            self._last_command_publisher = self.setpoint_pub
+            
             self.setpoint_pub.publish(msg)
             return True
         except Exception as e:
@@ -420,13 +361,13 @@ class PX4Setters:
         """
         Publish a velocity setpoint immediately.
 
-        When background heartbeat is running, this publishes your desired velocity
-        on-demand without interference from the heartbeat. The heartbeat only publishes
-        if no user command has been sent recently.
+        When background heartbeat is running, this publishes your desired velocity.
+        The heartbeat will then republish this velocity command at its frequency,
+        maintaining your movement command without interference.
 
         IMPORTANT:
-        - Call this as often as you need - it won't be overwritten by the heartbeat
-        - The heartbeat publishes zero velocity only when user isn't actively commanding
+        - Call this as often as you need in your mission logic
+        - The heartbeat automatically repeats your last command
         - For continuous movement, keep calling this at your desired rate
         """
         try:
@@ -444,21 +385,41 @@ class PX4Setters:
             msg.twist.linear.y = vy_f
             msg.twist.linear.z = vz_f
             msg.twist.angular.z = yaw_f
+            
+            # Store message and publisher for heartbeat to republish
+            self._last_command_message = msg
+            self._last_command_publisher = self.velocity_setpoint_pub
+            
             self.velocity_setpoint_pub.publish(msg)
             
             return True
         except Exception as e:
             print(f"[PX4][ERROR] Failed to set velocity setpoint: {str(e)}")
             return False
+        
 
-    def send_velocity_setpoint_gps(self, lat, lon, alt, yaw_rate=0.0):
+    def send_position_setpoint_gps(self, current_lat, current_lon, current_alt, target_lat, target_lon, target_alt, yaw_rate=0.0):
         """
-        Update the desired velocity setpoint in GPS coordinates. This will make traveling algs easier
-        we cannot run this in the second mission, as there isnt consistent access to the GPS
+        this function takes in current gps coordinates and a target gps coordinate, and calculates
+        where to go direction wise, by converting gps to Nort East South (NED) displacement vector.
         """
-    # =========================================================
-    # High-level helpers built on top of setters
-    # =========================================================
+        latitude1_rad = math.radians(current_lat)
+        longitude1_rad = math.radians(current_lon)
+        latitude2_rad = math.radians(target_lat)
+        longitude2_rad = math.radians(target_lon)
+
+        dlat = target_lat - current_lat
+        dlong = target_lon - current_lon
+        dalt = target_alt - current_alt
+
+        north = dlat * 111320
+        east = dlong * 111320 * math.cos(latitude1_rad)
+        down = -dalt #negative down = up
+
+        distance = math.sqrt(north**2 + east**2 + down**2)
+        self.send_position_setpoint(north, east, down)
+        
+        return north, east, down, distance
 
     def hold_current_position(self):
         """Publish a position setpoint equal to the current local pose"""
@@ -683,15 +644,19 @@ class PX4Setters:
         """
         Worker thread function that publishes a lightweight heartbeat message.
 
-        This runs in the background and keeps OFFBOARD mode alive by publishing
-        zero velocity setpoints. However, it SKIPS publishing if the user has
-        published a command recently (within the last heartbeat interval).
-
-        This prevents the heartbeat from overwriting user commands.
+        This runs in the background and keeps OFFBOARD mode alive by repeatedly
+        publishing the last command the user sent. The heartbeat behavior is simple:
+        - Whatever the user sent last (position or velocity) gets republished
+        - If user sent a position setpoint, heartbeat republishes that position
+        - If user sent a velocity command, heartbeat republishes that velocity
+        - If no command sent yet, heartbeat publishes zero velocity (hover)
+        
+        The heartbeat SKIPS publishing if the user has published a command recently
+        (within the last heartbeat interval). This prevents rapid updates from being
+        disrupted by the heartbeat republishing while the user is actively sending.
         
         The heartbeat publishes at a low frequency (default 10Hz) to keep PX4
-        aware the system is alive, while allowing user commands to take effect
-        without interference.
+        aware the system is alive.
         """
         dt = 1.0 / rate_hz
         publish_count = 0
@@ -703,15 +668,22 @@ class PX4Setters:
                 time_since_user_publish = time.time() - self._last_user_publish_time
                 
                 # Only publish heartbeat if user hasn't published recently
-                # This prevents heartbeat from overwriting user commands
+                # This prevents heartbeat from interfering with rapid user commands
                 if time_since_user_publish > dt:
-                    msg = TwistStamped()
-                    msg.header.stamp = self.get_clock().now().to_msg()
-                    msg.twist.linear.x = 0.0
-                    msg.twist.linear.y = 0.0
-                    msg.twist.linear.z = 0.0
-                    msg.twist.angular.z = 0.0
-                    self.velocity_setpoint_pub.publish(msg)
+                    # If there's a stored command, republish it
+                    if self._last_command_message is not None and self._last_command_publisher is not None:
+                        # Update timestamp to current time
+                        self._last_command_message.header.stamp = self.get_clock().now().to_msg()
+                        self._last_command_publisher.publish(self._last_command_message)
+                    else:
+                        # No command yet; publish zero velocity (hover)
+                        msg = TwistStamped()
+                        msg.header.stamp = self.get_clock().now().to_msg()
+                        msg.twist.linear.x = 0.0
+                        msg.twist.linear.y = 0.0
+                        msg.twist.linear.z = 0.0
+                        msg.twist.angular.z = 0.0
+                        self.velocity_setpoint_pub.publish(msg)
                     
                     publish_count += 1
                     
@@ -724,17 +696,3 @@ class PX4Setters:
             print(f"[PX4] Heartbeat worker error: {str(e)}")
             with self._stream_lock:
                 self._stream_running = False
-
-    def set_rc_channel(self, channel, pwm_value, timeout=30):
-        """
-        Set RC channel PWM value (for direct servo/throttle control)
-
-        Args:
-            channel: Channel number (1-8)
-            pwm_value: PWM value (typically 1000-2000 microseconds)
-            timeout: Timeout in seconds
-
-        Note: MAVROS RC override topic may be used for this
-        """
-        print("[PX4] RC override not yet implemented in MAVROS wrapper")
-        return False

@@ -2,13 +2,15 @@
 """
 OFFBOARD Hover Test
 
-This script demonstrates basic hover control in OFFBOARD mode:
+This script demonstrates basic OFFBOARD control with takeoff/land:
 1. Boot PX4 and connect to MAVROS
 2. Switch to OFFBOARD mode
-3. Wait for manual RC arm (can use --api for automatic arm)
-4. Fly upward at 0.5 m/s for 3 seconds
-5. Hover (stop movement) for 3 seconds
-6. Land and stop background stream
+3. Start background heartbeat stream (maintains setpoints)
+4. Wait for manual RC arm
+5. Takeoff to 5 meters
+6. Hover for 10 seconds
+7. Land back to ground
+8. Stop background stream
 
 Default: Wait for manual RC arm
 With --api: Automatically arm via MAVROS
@@ -81,7 +83,7 @@ class HoverTest:
             if not self.px4.start_offboard_stream_background():
                 self.log("[TEST] Failed to start background stream")
                 return False
-            self.log("[TEST] ✓ Background stream started (50Hz)")
+            self.log("[TEST] ✓ Background stream started (10Hz heartbeat)")
 
             # Step 4: Wait for arming (manual or API)
             if self.manual_arm:
@@ -118,38 +120,31 @@ class HoverTest:
                         self.log(f"[TEST]   current_state.armed={self.px4.current_state.armed}")
                     return False
             else:
+                #this must never happen, we always want to arm manually
                 self.log("\n[TEST] Arming vehicle via API...")
                 if not self.px4.arm_vehicle(timeout=20):
                     self.log("[TEST] API arm failed")
                     return False
                 self.log("[TEST] ✓ Vehicle armed via API")
 
-            # Step 5: Fly upward at 0.5 m/s for 3 seconds
-            self.log("\n[TEST] Sending upward velocity command (0.5 m/s up)...")
-            self.px4.send_velocity_setpoint(0.0, 0.0, 0.5, 0.0)  # Fly up
-            self.log("[TEST] ✓ Velocity command sent: moving upward")
+            # Step 5: Takeoff to 5 meters
+            self.log("\n[TEST] Taking off to 5 meters...")
+            if not self.px4.takeoff(altitude=5, timeout=30):
+                self.log("[TEST] Takeoff failed")
+                return False
+            self.log("[TEST] ✓ Takeoff complete")
 
-            # Step 6: Maintain upward flight for 3 seconds
-            self.log("\n[TEST] Maintaining upward flight for 3 seconds...")
-            time.sleep(3)
-            self.log("[TEST] ✓ Upward flight maintained")
-
-            # Step 7: Stop moving (hover)
-            self.log("\n[TEST] Sending hover command (stop movement)...")
-            self.px4.send_velocity_setpoint(0.0, 0.0, 0.0, 0.0)  # Hover
-            self.log("[TEST] ✓ Hovering")
-
-            # Step 8: Hover for 3 seconds
-            self.log("\n[TEST] Hovering for 3 seconds...")
-            time.sleep(30)
+            # Step 6: Hover for 10 seconds
+            self.log("\n[TEST] Hovering for 10 seconds...")
+            time.sleep(10)
             self.log("[TEST] ✓ Hover complete")
 
-            # Step 9: Land
+            # Step 7: Land
             self.log("\n[TEST] Landing...")
-            
-            if not self.px4.land():
-                self.log("[TEST] Warning: Land command may have failed")
-            self.log("[TEST] ✓ Landing initiated")
+            if not self.px4.land(timeout=30):
+                self.log("[TEST] Landing failed")
+                return False
+            self.log("[TEST] ✓ Landing complete")
 
             # Step 10: Stop background stream
             self.log("\n[TEST] Stopping background stream...")
