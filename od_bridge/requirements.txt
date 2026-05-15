@@ -1,0 +1,9 @@
+opencv-python==4.13.0.92
+numpy==2.0.2
+ultralytics==8.4.50
+yt-dlp==2025.10.14
+
+# Depth camera support (main.py --realsense).
+# Installs via pip on Linux/Windows x86_64. On macOS Apple Silicon there is no
+# wheel — build librealsense from source with Python bindings instead.
+pyrealsense2==2.57.7
