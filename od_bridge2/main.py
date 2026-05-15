@@ -20,6 +20,10 @@ DEFAULTS = {
     # Target is 5-30 cm; tolerance band widened to absorb depth/contour noise.
     "min_diameter_m": 0.03,
     "max_diameter_m": 0.45,
+    # Temporal lock: once a target is found, prefer candidates within this many
+    # pixels of last frame's centroid so the box does not flicker between
+    # similar-looking objects.
+    "track_radius": 120,
 }
 
 
@@ -53,7 +57,8 @@ def depth_size_ok(depth_frame, fx, calib, cx, cy, area):
     return ok, dist, real_diameter
 
 
-def detect(frame, calib, verbose=False, depth_frame=None, fx=None):
+def detect(frame, calib, verbose=False, depth_frame=None, fx=None,
+           prev_centroid=None):
     blurred = cv2.GaussianBlur(frame, (5, 5), 0)
     hsv = cv2.cvtColor(blurred, cv2.COLOR_BGR2HSV)
 
@@ -74,10 +79,11 @@ def detect(frame, calib, verbose=False, depth_frame=None, fx=None):
     solid = cv2.morphologyEx(solid, cv2.MORPH_OPEN, kernel)
 
     contours, _ = cv2.findContours(solid, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    best, best_area, best_stats = None, 0, None
+    # Collect every contour that passes all filters, then choose among them.
+    candidates = []
     for cnt in contours:
         area = cv2.contourArea(cnt)
-        if area < calib["min_area"] or area <= best_area:
+        if area < calib["min_area"]:
             continue
         perim = cv2.arcLength(cnt, True)
         if perim == 0:
@@ -106,10 +112,28 @@ def detect(frame, calib, verbose=False, depth_frame=None, fx=None):
                 print(f"rejected by depth size gate: real_diam={real_d:.2f} m "
                       f"at {dist:.2f} m")
             continue
-        best, best_area = cnt, area
-        best_stats = {"area": area, "circularity": circ, "aspect": aspect,
-                      "solidity": solidity, "bbox": (x, y, w, h),
-                      "distance": dist, "real_diameter": real_d}
+        candidates.append({
+            "cnt": cnt, "area": area, "circularity": circ, "aspect": aspect,
+            "solidity": solidity, "bbox": (x, y, w, h), "centroid": (cx, cy),
+            "distance": dist, "real_diameter": real_d,
+        })
+
+    # Pick the target. Circularity is the strongest cue for a round target, so
+    # rank on that rather than raw area (a background blob can be bigger).
+    # If we had a detection last frame, restrict to candidates near it first so
+    # the lock does not flicker between two valid-looking objects.
+    best_stats = None
+    if candidates:
+        pool = candidates
+        if prev_centroid is not None:
+            px, py = prev_centroid
+            gated = [c for c in candidates
+                     if (c["centroid"][0] - px) ** 2 + (c["centroid"][1] - py) ** 2
+                     <= calib["track_radius"] ** 2]
+            if gated:
+                pool = gated
+        best_stats = max(pool, key=lambda c: (c["circularity"], c["area"]))
+    best = best_stats["cnt"] if best_stats else None
 
     if best is not None:
         if len(best) >= 5:
@@ -178,6 +202,9 @@ def run_realsense(calib, verbose=False):
     fx = color_profile.get_intrinsics().fx
 
     align = rs.align(rs.stream.color)
+    prev_centroid = None   # last frame's target position, for the temporal lock
+    misses = 0             # consecutive frames with no detection
+    MAX_MISSES = 8         # drop the lock after this many empty frames
     try:
         while True:
             frames = align.process(pipeline.wait_for_frames())
@@ -188,7 +215,16 @@ def run_realsense(calib, verbose=False):
 
             frame = np.asanyarray(color_frame.get_data())
             annotated, mask, stats = detect(frame, calib, verbose=verbose,
-                                            depth_frame=depth_frame, fx=fx)
+                                            depth_frame=depth_frame, fx=fx,
+                                            prev_centroid=prev_centroid)
+
+            if stats and stats.get("centroid"):
+                prev_centroid = stats["centroid"]
+                misses = 0
+            else:
+                misses += 1
+                if misses >= MAX_MISSES:
+                    prev_centroid = None
 
             if stats and stats.get("centroid"):
                 cx, cy = stats["centroid"]
