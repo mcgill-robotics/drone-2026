@@ -2,8 +2,8 @@
 Pathfinding strategy classes for navigation and path planning
 """
 from abc import ABC, abstractmethod
-from .types import Point
-from .stubs import generate_print_pattern, generate_potential_field_path
+from types import Point
+from stubs import generate_print_pattern, generate_potential_field_path
 
 
 class PathfindingStrategy(ABC):

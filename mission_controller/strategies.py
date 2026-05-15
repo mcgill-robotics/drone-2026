@@ -3,7 +3,7 @@ Mission strategy classes implementing different mission behaviors
 Uses the Strategy pattern for flexible mission planning
 """
 from abc import ABC, abstractmethod
-from .stubs import run_lap_algorithm, goto_drone
+from stubs import run_lap_algorithm, goto_drone
 
 
 class MissionStrategy(ABC):

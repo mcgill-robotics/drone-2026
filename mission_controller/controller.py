@@ -3,10 +3,10 @@ Main mission controller implementing FSM state machine
 Core logic for managing drone mission execution
 """
 import time
-from .types import MissionState, Mode, MissionType, Point
-from .strategies import MissionOne, MissionTwo
-from .px4_interface import get_px4
-from .stubs import (
+from types import MissionState, Mode, MissionType, Point
+from strategies import MissionOne, MissionTwo
+from px4_interface import get_px4
+from stubs import (
     goto_drone, boustrophedon_search,
     at_position, pad_has_extinguisher, drop_payload, inside_boundary
 )

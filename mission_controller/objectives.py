@@ -4,7 +4,7 @@ Objectives represent specific tasks to be accomplished during a mission.
 A mission can have many objectives, and the MissionController will manage their execution.
 """
 from abc import ABC, abstractmethod
-from .stubs import extinguish_fire, take_survey_photos, release_payload
+from stubs import extinguish_fire, take_survey_photos, release_payload
 
 
 class Objective(ABC):

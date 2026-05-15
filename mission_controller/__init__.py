@@ -4,28 +4,28 @@ example: instead of writing "from mission_controller.controller import MissionCo
 "from mission_controller import MissionController". This is ONLY for external package users.
 """
 # PX4 Interface
-from .px4_interface import PX4Interface, init_px4, boot_px4, stop_px4, get_px4
+from px4_interface import PX4Interface, init_px4, boot_px4, stop_px4, get_px4
 
 # Core types
-from .types import MissionState, Mode, Point
+from types import MissionState, Mode, Point
 
 # Objectives
-from .objectives import Objective, ExtinguishObjective, SurveyObjective, PayloadDeliveryObjective
+from objectives import Objective, ExtinguishObjective, SurveyObjective, PayloadDeliveryObjective
 
 # Pathfinding
-from .pathfinding import PathfindingStrategy, PathPrinting, PotentialFieldPathfinding
+from pathfinding import PathfindingStrategy, PathPrinting, PotentialFieldPathfinding
 
 # Mission Strategies
-from .strategies import MissionStrategy, MissionOne, MissionTwo
+from strategies import MissionStrategy, MissionOne, MissionTwo
 
 # Core Controller
-from .controller import MissionController
+from controller import MissionController
 
 # Driver
-from .driver import Driver
+from driver import Driver
 
 # Stub functions
-from .stubs import (
+from stubs import (
     goto_drone, run_lap_algorithm,
     boustrophedon_search, at_position, pad_has_extinguisher,
     drop_payload, inside_boundary, extinguish_fire, take_survey_photos,
