@@ -212,40 +212,54 @@ class PX4Setters:
             return False
 
     def takeoff(self, altitude, timeout=60):
-        #TODO
         """
-        Perform takeoff to specified altitude
+        Perform takeoff to specified altitude using position setpoint in OFFBOARD mode.
+        
+        Sends a position setpoint with the target altitude. The heartbeat will continuously
+        republish this position, maintaining the climb until the target altitude is reached.
         """
         if not self.connected:
             print("[PX4] Not connected to MAVROS, cannot takeoff")
             return False
 
         altitude = self._clamp_alt(float(altitude))
-        print(f"[PX4] Taking off to {altitude}m...")
-
+        
+        # Get current position
+        if not self.current_position:
+            print("[PX4] Cannot takeoff: current position unavailable")
+            return False
+        
+        current = self.current_position.pose.position
+        target_alt = current.z + altitude
+        
+        print(f"[PX4] Taking off to {target_alt:.2f}m (current: {current.z:.2f}m, climbing {altitude:.2f}m)...")
+        
         try:
             # Arm if not already armed
             if not self.is_armed():
                 if not self.arm_vehicle():
                     return False
-            req = CommandTOL.Request() # takeoff and land request
-            req.altitude = float(altitude)
-
-            future = self.takeoff_client.call_async(req)
-
+            
+            # Send position setpoint (heartbeat will maintain it)
+            #the send position is actually absolute, so even if it gets called infinitely it will
+            #stay at 5m up
+            if not self.send_position_setpoint(current.x, current.y, target_alt):
+                print("[PX4] Failed to send takeoff position setpoint")
+                return False
+            
+            # Wait until target altitude is reached
             start = time.time()
-            while not future.done() and (time.time() - start) < timeout:
+            while (time.time() - start) < timeout:
                 rclpy.spin_once(self, timeout_sec=0.1)
-                #here, we dont need to check if we received a message, because
-                #the drone checks for altitude, so its actually already robust
+                
                 if self.current_position:
                     current_alt = self.current_position.pose.position.z
-                    if current_alt >= (altitude * 0.95):  # 95% of target
-                        print(f"[PX4] Takeoff complete, reached {current_alt:.1f}m")
+                    if current_alt >= (target_alt * 0.95):  # 95% of target
+                        print(f"[PX4] Takeoff complete, reached {current_alt:.2f}m")
                         return True
-
+                
                 time.sleep(0.5)
-
+            
             print("[PX4] Takeoff timeout")
             return False
         except Exception as e:
@@ -253,37 +267,46 @@ class PX4Setters:
             return False
 
     def land(self, timeout=60):
-        #TODO
         """
-        Perform landing sequence
-
-        Args:
-            timeout: Timeout in seconds
+        Perform landing sequence using position setpoint in OFFBOARD mode.
+        
+        Sends a position setpoint with altitude 0 (ground level) at current x, y location.
+        The heartbeat will continuously republish this position, maintaining the descent
+        until the drone reaches the ground.
         """
         if not self.connected:
             print("[PX4] Not connected to MAVROS, cannot land")
             return False
 
-        print("[PX4] Landing...")
-
+        # Get current position
+        if not self.current_position:
+            print("[PX4] Cannot land: current position unavailable")
+            return False
+        
+        current = self.current_position.pose.position
+        target_alt = 0.0  # Land at ground level
+        
+        print(f"[PX4] Landing to ground (current: {current.z:.2f}m)...")
+        
         try:
-            req = CommandTOL.Request()
-            req.altitude = 0  # Land at current location
-
-            future = self.land_client.call_async(req)
-
+            # Send position setpoint at ground level (heartbeat will maintain it)
+            if not self.send_position_setpoint(current.x, current.y, target_alt):
+                print("[PX4] Failed to send landing position setpoint")
+                return False
+            
+            # Wait until target altitude is reached
             start = time.time()
-            while not future.done() and (time.time() - start) < timeout:
+            while (time.time() - start) < timeout:
                 rclpy.spin_once(self, timeout_sec=0.1)
-
+                
                 if self.current_position:
                     current_alt = self.current_position.pose.position.z
                     if current_alt < 0.1:  # Close to ground
-                        print("[PX4] Landing complete")
+                        print(f"[PX4] Landing complete, reached {current_alt:.2f}m")
                         return True
-
+                
                 time.sleep(0.5)
-
+            
             print("[PX4] Landing timeout")
             return False
         except Exception as e:
