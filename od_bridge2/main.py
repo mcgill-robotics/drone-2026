@@ -15,6 +15,11 @@ DEFAULTS = {
     "circularity": 0.45,
     "aspect": 0.5,
     "solidity": 0.9,
+    # Depth-gated size check (lighting-invariant). A real target must have an
+    # apparent pixel size consistent with a physical diameter in this range.
+    # Target is 5-30 cm; tolerance band widened to absorb depth/contour noise.
+    "min_diameter_m": 0.03,
+    "max_diameter_m": 0.45,
 }
 
 
@@ -29,7 +34,26 @@ def load_calibration():
     return calib
 
 
-def detect(frame, calib, verbose=False):
+def depth_size_ok(depth_frame, fx, calib, cx, cy, area):
+    """Reject blobs whose apparent size is inconsistent with the target's
+    real-world diameter at the measured distance. Lighting-invariant.
+
+    Returns (ok, distance, real_diameter_m). If depth is unavailable the check
+    passes (ok=True) so the pipeline degrades to color+shape only.
+    """
+    if depth_frame is None or not fx:
+        return True, None, None
+    dist = median_depth(depth_frame, cx, cy)
+    if dist is None or dist <= 0:
+        return True, None, None
+    # Equivalent-circle radius of the blob, projected to metres at this depth.
+    radius_px = (area / np.pi) ** 0.5
+    real_diameter = 2.0 * radius_px * dist / fx
+    ok = calib["min_diameter_m"] <= real_diameter <= calib["max_diameter_m"]
+    return ok, dist, real_diameter
+
+
+def detect(frame, calib, verbose=False, depth_frame=None, fx=None):
     blurred = cv2.GaussianBlur(frame, (5, 5), 0)
     hsv = cv2.cvtColor(blurred, cv2.COLOR_BGR2HSV)
 
@@ -70,9 +94,22 @@ def detect(frame, calib, verbose=False):
         solidity = area / hull_area if hull_area else 0
         if solidity < calib["solidity"]:
             continue
+        # Depth-gated size check: reject blobs whose apparent size is
+        # inconsistent with a 5-30 cm target at the measured distance.
+        M = cv2.moments(cnt)
+        if M["m00"] <= 0:
+            continue
+        cx, cy = int(M["m10"] / M["m00"]), int(M["m01"] / M["m00"])
+        size_ok, dist, real_d = depth_size_ok(depth_frame, fx, calib, cx, cy, area)
+        if not size_ok:
+            if verbose:
+                print(f"rejected by depth size gate: real_diam={real_d:.2f} m "
+                      f"at {dist:.2f} m")
+            continue
         best, best_area = cnt, area
         best_stats = {"area": area, "circularity": circ, "aspect": aspect,
-                      "solidity": solidity, "bbox": (x, y, w, h)}
+                      "solidity": solidity, "bbox": (x, y, w, h),
+                      "distance": dist, "real_diameter": real_d}
 
     if best is not None:
         if len(best) >= 5:
@@ -121,11 +158,24 @@ def run_realsense(calib, verbose=False):
     config.enable_stream(rs.stream.color, 640, 480, rs.format.bgr8, 30)
     config.enable_stream(rs.stream.depth, 640, 480, rs.format.z16, 30)
     try:
-        pipeline.start(config)
+        profile = pipeline.start(config)
     except RuntimeError as e:
         print(f"Could not start RealSense pipeline: {e}")
         print("Check the camera is connected (run: rs-enumerate-devices).")
         sys.exit(1)
+
+    # Lock white balance so hue stays stable across indoor/outdoor lighting;
+    # keep auto-exposure ON so the sensor adapts to the brightness range.
+    color_sensor = profile.get_device().first_color_sensor()
+    try:
+        color_sensor.set_option(rs.option.enable_auto_white_balance, 0)
+        color_sensor.set_option(rs.option.enable_auto_exposure, 1)
+    except Exception as e:
+        print(f"Warning: could not set color sensor options: {e}")
+
+    # Color intrinsics: fx (focal length in pixels) drives the depth size gate.
+    color_profile = profile.get_stream(rs.stream.color).as_video_stream_profile()
+    fx = color_profile.get_intrinsics().fx
 
     align = rs.align(rs.stream.color)
     try:
@@ -137,13 +187,14 @@ def run_realsense(calib, verbose=False):
                 continue
 
             frame = np.asanyarray(color_frame.get_data())
-            annotated, mask, stats = detect(frame, calib, verbose=verbose)
+            annotated, mask, stats = detect(frame, calib, verbose=verbose,
+                                            depth_frame=depth_frame, fx=fx)
 
             if stats and stats.get("centroid"):
                 cx, cy = stats["centroid"]
-                dist = median_depth(depth_frame, cx, cy)
+                dist = stats.get("distance")
                 if dist is not None:
-                    label = f"{dist:.2f} m"
+                    label = f"{dist:.2f} m  ~{stats['real_diameter'] * 100:.0f} cm"
                     cv2.putText(annotated, label, (cx + 10, cy),
                                 cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
                     if verbose:
