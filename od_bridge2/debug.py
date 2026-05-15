@@ -4,14 +4,42 @@ import sys
 import cv2
 import numpy as np
 
+def grab_realsense_frame():
+    """Capture a single settled color frame from a RealSense camera (e.g. D455)."""
+    import pyrealsense2 as rs
+    pipeline = rs.pipeline()
+    config = rs.config()
+    config.enable_stream(rs.stream.color, 640, 480, rs.format.bgr8, 30)
+    pipeline.start(config)
+    try:
+        # Discard early frames so auto-exposure / white-balance settle.
+        for _ in range(30):
+            frames = pipeline.wait_for_frames()
+        color_frame = frames.get_color_frame()
+        return np.asanyarray(color_frame.get_data()).copy()
+    finally:
+        pipeline.stop()
+
+
 if len(sys.argv) < 2:
     print("Usage: python debug.py <image_path>")
+    print("       python debug.py --realsense   (capture a frame from a D455)")
     sys.exit(1)
 
-img = cv2.imread(sys.argv[1])
-if img is None:
-    print(f"Could not read {sys.argv[1]}")
-    sys.exit(1)
+if sys.argv[1] == "--realsense":
+    img = grab_realsense_frame()
+    # Save the capture so it can be re-tuned later without the camera.
+    CAPTURE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                "realsense_capture.png")
+    cv2.imwrite(CAPTURE_PATH, img)
+    print(f"captured frame from RealSense -> {CAPTURE_PATH}")
+    CALIB_DIR = os.path.dirname(os.path.abspath(__file__))
+else:
+    img = cv2.imread(sys.argv[1])
+    if img is None:
+        print(f"Could not read {sys.argv[1]}")
+        sys.exit(1)
+    CALIB_DIR = os.path.dirname(os.path.abspath(sys.argv[1]))
 
 h, w = img.shape[:2]
 scale = min(1.0, 900 / max(h, w))
@@ -56,7 +84,7 @@ cv2.createTrackbar("circ x100", "controls", 60, 100, nothing)
 
 print("Click pixels on the target to sample HSV. Press 's' to save calibration.json, 'q' to quit.")
 
-CALIB_PATH = os.path.join(os.path.dirname(os.path.abspath(sys.argv[1])), "calibration.json")
+CALIB_PATH = os.path.join(CALIB_DIR, "calibration.json")
 
 while True:
     h1_lo = cv2.getTrackbarPos("H1 lo", "controls")
