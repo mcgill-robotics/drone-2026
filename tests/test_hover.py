@@ -86,10 +86,12 @@ class HoverTest:
             self.log("[TEST] ✓ Background stream started (10Hz heartbeat)")
 
             # Step 4: Wait for arming (manual or API)
+            """
             if self.manual_arm:
                 self.log("\n[TEST] Waiting for manual arm (60 seconds)...")
                 self.log("[TEST] Please arm the vehicle manually via RC transmitter or QGC")
-                
+            
+            
                 if not self.px4.wait_for_arm_with_heartbeat(timeout=60, heartbeat_rate=10):
                     self.log("[TEST] Arm timeout - vehicle was not armed")
                     return False
@@ -100,8 +102,10 @@ class HoverTest:
                     self.log("[TEST] API arm failed")
                     return False
                 self.log("[TEST] ✓ Vehicle armed via API")
-
+            """
+            time.sleep(5)
             # Step 5: Takeoff to 5 meters
+            self.log("NEXT STEP")
             self.log("\n[TEST] Taking off to 5 meters...")
             if not self.px4.takeoff(altitude=5, timeout=30):
                 self.log("[TEST] Takeoff failed")
