@@ -88,36 +88,10 @@ class HoverTest:
             # Step 4: Wait for arming (manual or API)
             if self.manual_arm:
                 self.log("\n[TEST] Waiting for manual arm (60 seconds)...")
-                self.log("[TEST] Please arm the vehicle manually via RC transmitter")
+                self.log("[TEST] Please arm the vehicle manually via RC transmitter or QGC")
                 
-                # Simple polling approach with detailed logging
-                start_arm = time.time()
-                arm_timeout = 60
-                poll_interval = 0.5
-                
-                while (time.time() - start_arm) < arm_timeout:
-                    rclpy.spin_once(self.px4, timeout_sec=0.1)
-                    
-                    is_armed = self.px4.is_armed()
-                    current_state = self.px4.current_state
-                    
-                    if is_armed:
-                        self.log("[TEST] ✓ Vehicle armed!")
-                        break
-                    
-                    elapsed = time.time() - start_arm
-                    if elapsed % 5 < 0.5:  # Log every ~5 seconds
-                        self.log(f"[TEST] Waiting... {int(arm_timeout - elapsed)}s remaining")
-                        self.log(f"[TEST]   is_armed()={is_armed}, current_state={current_state}")
-                        if current_state:
-                            self.log(f"[TEST]   current_state.armed={current_state.armed}, current_state.connected={current_state.connected}")
-                    
-                    time.sleep(poll_interval)
-                else:
+                if not self.px4.wait_for_arm_with_heartbeat(timeout=60, heartbeat_rate=10):
                     self.log("[TEST] Arm timeout - vehicle was not armed")
-                    self.log(f"[TEST]   Final state: is_armed()={self.px4.is_armed()}")
-                    if self.px4.current_state:
-                        self.log(f"[TEST]   current_state.armed={self.px4.current_state.armed}")
                     return False
             else:
                 #this must never happen, we always want to arm manually
