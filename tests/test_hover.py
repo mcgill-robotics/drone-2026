@@ -118,6 +118,7 @@ class HoverTest:
                         self.log(f"[TEST]   current_state.armed={self.px4.current_state.armed}")
                     return False
             else:
+                #this must never happen, we always want to arm manually
                 self.log("\n[TEST] Arming vehicle via API...")
                 if not self.px4.arm_vehicle(timeout=20):
                     self.log("[TEST] API arm failed")

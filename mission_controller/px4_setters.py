@@ -16,6 +16,7 @@ It assumes the main interface object already created:
 import time
 import rclpy
 import threading
+import math
 from geometry_msgs.msg import PoseStamped, TwistStamped
 from mavros_msgs.srv import CommandBool, SetMode, CommandTOL, ParamSet
 from mavros_msgs.msg import ParamValue
@@ -48,6 +49,8 @@ class PX4Setters:
         self._stream_running = False
         self._stream_lock = threading.Lock()
         self._last_user_publish_time = 0  # Track when user last published a command
+        self._last_command_message = None  # Track last published message (PoseStamped or TwistStamped)
+        self._last_command_publisher = None  # Track which publisher to use for heartbeat
 
         # Altitude limit (software-side clamp). None = no limit until set.
         # Firmware fence is set independently via set_altitude_limit_ft().
@@ -192,12 +195,10 @@ class PX4Setters:
             return False
 
         # Check if service is available
-        print(f"[PX4] Checking if set_mode service is available...")
         if not self.set_mode_client.wait_for_service(timeout_sec=5):
             print("[PX4] Service /set_mode NOT available after 5 seconds")
             print("[PX4] Make sure MAVROS is running: ros2 launch mavros px4.launch fcu_url:=...")
             return False
-        print("[PX4] ✓ Service is available")
 
         print(f"[PX4] Changing mode to {mode_name}...")
         try:
@@ -402,14 +403,30 @@ class PX4Setters:
         This is a topic publish , not a service call. (messages vs services)
         In other words, the following functions below just send a command,
         but do not expect a response.
+        
+        When a background heartbeat is running, this setpoint is stored and
+        republished by the heartbeat thread at its frequency. This ensures the
+        position target is maintained without being overwritten by other messages.
         """
         try:
+            # Record that user just published (heartbeat will skip if recent)
+            self._last_user_publish_time = time.time()
+            
+            x_clamped = float(x)
+            y_clamped = float(y)
+            z_clamped = self._clamp_alt(float(z))
+            
             msg = PoseStamped()
             msg.header.stamp = self.get_clock().now().to_msg()
             msg.header.frame_id = "map"
-            msg.pose.position.x = float(x)
-            msg.pose.position.y = float(y)
-            msg.pose.position.z = self._clamp_alt(float(z))
+            msg.pose.position.x = x_clamped
+            msg.pose.position.y = y_clamped
+            msg.pose.position.z = z_clamped
+            
+            # Store message and publisher for heartbeat to republish
+            self._last_command_message = msg
+            self._last_command_publisher = self.setpoint_pub
+            
             self.setpoint_pub.publish(msg)
             return True
         except Exception as e:
@@ -420,13 +437,13 @@ class PX4Setters:
         """
         Publish a velocity setpoint immediately.
 
-        When background heartbeat is running, this publishes your desired velocity
-        on-demand without interference from the heartbeat. The heartbeat only publishes
-        if no user command has been sent recently.
+        When background heartbeat is running, this publishes your desired velocity.
+        The heartbeat will then republish this velocity command at its frequency,
+        maintaining your movement command without interference.
 
         IMPORTANT:
-        - Call this as often as you need - it won't be overwritten by the heartbeat
-        - The heartbeat publishes zero velocity only when user isn't actively commanding
+        - Call this as often as you need in your mission logic
+        - The heartbeat automatically repeats your last command
         - For continuous movement, keep calling this at your desired rate
         """
         try:
@@ -444,21 +461,39 @@ class PX4Setters:
             msg.twist.linear.y = vy_f
             msg.twist.linear.z = vz_f
             msg.twist.angular.z = yaw_f
+            
+            # Store message and publisher for heartbeat to republish
+            self._last_command_message = msg
+            self._last_command_publisher = self.velocity_setpoint_pub
+            
             self.velocity_setpoint_pub.publish(msg)
             
             return True
         except Exception as e:
             print(f"[PX4][ERROR] Failed to set velocity setpoint: {str(e)}")
-            return False
+          
+    def send_position_setpoint_gps(self, current_lat, current_lon, current_alt, target_lat, target_lon, target_alt, yaw_rate=0.0):
+        """
+        this function takes in current gps coordinates and a target gps coordinate, and calculates
+        where to go direction wise, by converting gps to Nort East South (NED) displacement vector.
+        """
+        latitude1_rad = math.radians(current_lat)
+        longitude1_rad = math.radians(current_lon)
+        latitude2_rad = math.radians(target_lat)
+        longitude2_rad = math.radians(target_lon)
 
-    def send_velocity_setpoint_gps(self, lat, lon, alt, yaw_rate=0.0):
-        """
-        Update the desired velocity setpoint in GPS coordinates. This will make traveling algs easier
-        we cannot run this in the second mission, as there isnt consistent access to the GPS
-        """
-    # =========================================================
-    # High-level helpers built on top of setters
-    # =========================================================
+        dlat = target_lat - current_lat
+        dlong = target_lon - current_lon
+        dalt = target_alt - current_alt
+
+        north = dlat * 111320
+        east = dlong * 111320 * math.cos(latitude1_rad)
+        down = -dalt #negative down = up
+
+        distance = math.sqrt(north**2 + east**2 + down**2)
+        self.send_position_setpoint(north, east, down)
+        
+        return north, east, down, distance
 
     def hold_current_position(self):
         """Publish a position setpoint equal to the current local pose"""
@@ -683,15 +718,19 @@ class PX4Setters:
         """
         Worker thread function that publishes a lightweight heartbeat message.
 
-        This runs in the background and keeps OFFBOARD mode alive by publishing
-        zero velocity setpoints. However, it SKIPS publishing if the user has
-        published a command recently (within the last heartbeat interval).
-
-        This prevents the heartbeat from overwriting user commands.
+        This runs in the background and keeps OFFBOARD mode alive by repeatedly
+        publishing the last command the user sent. The heartbeat behavior is simple:
+        - Whatever the user sent last (position or velocity) gets republished
+        - If user sent a position setpoint, heartbeat republishes that position
+        - If user sent a velocity command, heartbeat republishes that velocity
+        - If no command sent yet, heartbeat publishes zero velocity (hover)
+        
+        The heartbeat SKIPS publishing if the user has published a command recently
+        (within the last heartbeat interval). This prevents rapid updates from being
+        disrupted by the heartbeat republishing while the user is actively sending.
         
         The heartbeat publishes at a low frequency (default 10Hz) to keep PX4
-        aware the system is alive, while allowing user commands to take effect
-        without interference.
+        aware the system is alive.
         """
         dt = 1.0 / rate_hz
         publish_count = 0
@@ -703,15 +742,22 @@ class PX4Setters:
                 time_since_user_publish = time.time() - self._last_user_publish_time
                 
                 # Only publish heartbeat if user hasn't published recently
-                # This prevents heartbeat from overwriting user commands
+                # This prevents heartbeat from interfering with rapid user commands
                 if time_since_user_publish > dt:
-                    msg = TwistStamped()
-                    msg.header.stamp = self.get_clock().now().to_msg()
-                    msg.twist.linear.x = 0.0
-                    msg.twist.linear.y = 0.0
-                    msg.twist.linear.z = 0.0
-                    msg.twist.angular.z = 0.0
-                    self.velocity_setpoint_pub.publish(msg)
+                    # If there's a stored command, republish it
+                    if self._last_command_message is not None and self._last_command_publisher is not None:
+                        # Update timestamp to current time
+                        self._last_command_message.header.stamp = self.get_clock().now().to_msg()
+                        self._last_command_publisher.publish(self._last_command_message)
+                    else:
+                        # No command yet; publish zero velocity (hover)
+                        msg = TwistStamped()
+                        msg.header.stamp = self.get_clock().now().to_msg()
+                        msg.twist.linear.x = 0.0
+                        msg.twist.linear.y = 0.0
+                        msg.twist.linear.z = 0.0
+                        msg.twist.angular.z = 0.0
+                        self.velocity_setpoint_pub.publish(msg)
                     
                     publish_count += 1
                     
@@ -724,17 +770,3 @@ class PX4Setters:
             print(f"[PX4] Heartbeat worker error: {str(e)}")
             with self._stream_lock:
                 self._stream_running = False
-
-    def set_rc_channel(self, channel, pwm_value, timeout=30):
-        """
-        Set RC channel PWM value (for direct servo/throttle control)
-
-        Args:
-            channel: Channel number (1-8)
-            pwm_value: PWM value (typically 1000-2000 microseconds)
-            timeout: Timeout in seconds
-
-        Note: MAVROS RC override topic may be used for this
-        """
-        print("[PX4] RC override not yet implemented in MAVROS wrapper")
-        return False
