@@ -614,30 +614,37 @@ class PX4Setters:
         heartbeat_interval = 1.0 / heartbeat_rate
         start_time = time.time()
         heartbeat_count = 0
+        last_log = 0
         
         print(f"[PX4] Waiting for arm (timeout={timeout}s, heartbeat={heartbeat_rate}Hz)...")
+        print(f"[PX4] DEBUG: current_state at start = {self.current_state}")
         
         while (time.time() - start_time) < timeout:
             # Publish heartbeat to maintain OFFBOARD mode
             self.send_velocity_setpoint(0.0, 0.0, 0.0, 0.0)
             heartbeat_count += 1
 
-            rclpy.spin_once(self, timeout_sec=0.1)
+            # Spin multiple times to ensure messages are processed
+            for _ in range(5):
+                rclpy.spin_once(self, timeout_sec=0.02)
             
             # Check if armed
-            if self.is_armed():
+            is_armed_now = self.is_armed()
+            if is_armed_now:
                 elapsed = time.time() - start_time
                 print(f"[PX4] ✓ Vehicle armed in {elapsed:.1f}s ({heartbeat_count} heartbeats)")
                 return True
             
-            # Log progress occasionally
-            remaining = int(timeout - (time.time() - start_time))
-            if remaining > 0 and remaining % 10 == 0:
-                print(f"[PX4] Waiting... {remaining}s remaining ({heartbeat_count} heartbeats sent)")
+            # Log progress every second
+            current_time = time.time() - start_time
+            if int(current_time) != last_log:
+                last_log = int(current_time)
+                print(f"[PX4] DEBUG: Waiting {int(timeout - current_time)}s... current_state={self.current_state}, is_armed={is_armed_now}")
             
-    
+            time.sleep(heartbeat_interval)
         
         print(f"[PX4] ✗ Arm timeout after {timeout}s ({heartbeat_count} heartbeats)")
+        print(f"[PX4] DEBUG: Final current_state = {self.current_state}")
         return False
 
     def _heartbeat_worker(self, rate_hz):
