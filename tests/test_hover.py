@@ -2,13 +2,15 @@
 """
 OFFBOARD Hover Test
 
-This script demonstrates basic hover control in OFFBOARD mode:
+This script demonstrates basic OFFBOARD control with takeoff/land:
 1. Boot PX4 and connect to MAVROS
 2. Switch to OFFBOARD mode
-3. Wait for manual RC arm (can use --api for automatic arm)
-4. Fly upward at 0.5 m/s for 3 seconds
-5. Hover (stop movement) for 3 seconds
-6. Land and stop background stream
+3. Start background heartbeat stream (maintains setpoints)
+4. Wait for manual RC arm
+5. Takeoff to 5 meters
+6. Hover for 10 seconds
+7. Land back to ground
+8. Stop background stream
 
 Default: Wait for manual RC arm
 With --api: Automatically arm via MAVROS
@@ -81,7 +83,7 @@ class HoverTest:
             if not self.px4.start_offboard_stream_background():
                 self.log("[TEST] Failed to start background stream")
                 return False
-            self.log("[TEST] ✓ Background stream started (50Hz)")
+            self.log("[TEST] ✓ Background stream started (10Hz heartbeat)")
 
             # Step 4: Wait for arming (manual or API)
             if self.manual_arm:
