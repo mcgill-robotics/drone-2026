@@ -367,7 +367,6 @@ class PX4Getters(Node):
         self._last_gps_time = time.time()
         if not self._seen_gps:
             print(f"[PX4] Receiving GPS position: lat={msg.latitude:.6f}, lon={msg.longitude:.6f}, alt={msg.altitude:.2f}")
-            print(f"[PX4] Full NavSatFix message: {msg}")
             self._seen_gps = True
 
     def _global_position_raw_fix_callback(self, msg):
