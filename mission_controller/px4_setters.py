@@ -27,22 +27,6 @@ DEFAULT_MAX_ALT_FT = 400  # FAA Part 107 ceiling
 
 
 class PX4Setters:
-    """
-    Mixin containing control / setter APIs.
-
-    This class assumes the object already has:
-    - connected
-    - current_position
-    - arming_client
-    - set_mode_client
-    - takeoff_client
-    - land_client
-    - setpoint_pub
-    - velocity_setpoint_pub
-    - get_clock()
-    - is_armed()
-    """
-
     def __init__(self, **kwargs):
         """Initialize threads and state, then pass control to parent class"""
         self._stream_thread = None
@@ -53,20 +37,10 @@ class PX4Setters:
         self._last_command_publisher = None  # Track which publisher to use for heartbeat
 
         # Altitude limit (software-side clamp). None = no limit until set.
-        # Firmware fence is set independently via set_altitude_limit_ft().
         self._max_alt_m = None
-
-        # Call parent class __init__ (PX4Getters -> Node)
         super().__init__(**kwargs)
 
     def set_altitude_limit_ft(self, feet=DEFAULT_MAX_ALT_FT, timeout=10):
-        """
-        Configure altitude limit in feet. Sets the ArduPilot fence on the FCU
-        AND records the limit locally for software-side setpoint clamping.
-
-        Call once after connect, before takeoff. ArduPilot params persist on
-        the FCU, so re-calling per-command is unnecessary.
-        """
         if not self.connected:
             print("[PX4] Not connected, cannot set altitude limit")
             return False
@@ -112,12 +86,7 @@ class PX4Setters:
         return z
 
     def arm_vehicle(self, timeout=20):
-        """
-        Arm the vehicle (allow motors to spin)
-
-        Args:
-            timeout: Timeout in seconds
-        """
+        #Arm the vehicle (allow motors to spin)
         if not self.connected:
             print("[PX4] Not connected to MAVROS, cannot arm")
             return False
@@ -139,7 +108,7 @@ class PX4Setters:
                 #we spin until we get a response
                 rclpy.spin_once(self, timeout_sec=0.1)
                 time.sleep(0.1)
-            #future.done() checks if smt received, .result() checks if something is in, .success is state
+            #future.done() checks if smt received, .result() checks if something is inside, .success is state
             if future.done() and future.result() and future.result().success:
                 print("[PX4] Vehicle armed successfully")
                 return True
@@ -151,7 +120,10 @@ class PX4Setters:
             return False
 
     def disarm_vehicle(self, timeout=20):
-        """Disarm the vehicle (prevent motors from spinning)"""
+        """
+        Disarm the vehicle (prevent motors from spinning)
+        we will probably never use this
+        """
         if not self.connected:
             print("[PX4] Not connected to MAVROS, cannot disarm")
             return False
@@ -185,10 +157,7 @@ class PX4Setters:
     def change_mode(self, mode_name, timeout=30):
         """
         Change vehicle flight mode
-
-        Args:
-            mode_name: Mode name (e.g., "GUIDED", "AUTO", "LAND", "RTL", "OFFBOARD")
-            timeout: Timeout in seconds
+        mode_name: Mode name (e.g., "GUIDED", "AUTO", "LAND", "RTL", "OFFBOARD")
         """
         if not self.connected:
             print("[PX4] Not connected to MAVROS, cannot change mode")
@@ -197,7 +166,6 @@ class PX4Setters:
         # Check if service is available
         if not self.set_mode_client.wait_for_service(timeout_sec=5):
             print("[PX4] Service /set_mode NOT available after 5 seconds")
-            print("[PX4] Make sure MAVROS is running: ros2 launch mavros px4.launch fcu_url:=...")
             return False
 
         print(f"[PX4] Changing mode to {mode_name}...")
@@ -230,7 +198,7 @@ class PX4Setters:
             
             result = future.result()
             if result and result.mode_sent:
-                print(f"[PX4] ✓ Mode changed to {mode_name}")
+                print(f"[PX4] Mode changed to {mode_name}")
                 return True
             else:
                 print(f"[PX4] Mode change REJECTED by PX4 (mode_sent=False)")
@@ -243,31 +211,10 @@ class PX4Setters:
             traceback.print_exc()
             return False
 
-    def wait_for_mode(self, mode_name, timeout=5):
-        """Poll until current_state.mode equals mode_name, or timeout.
-
-        `change_mode` only confirms the request was accepted (`mode_sent`),
-        not that PX4 actually entered the mode. PX4 can reject a mode
-        transition after accepting the request (e.g. OFFBOARD without
-        enough setpoints flowing). Use this after `change_mode` to verify.
-        """
-        start = time.time()
-        while time.time() - start < timeout:
-            rclpy.spin_once(self, timeout_sec=0.1)
-            if self.current_state and self.current_state.mode == mode_name:
-                return True
-            time.sleep(0.1)
-        actual = self.current_state.mode if self.current_state else "unknown"
-        print(f"[PX4] wait_for_mode: wanted {mode_name}, got {actual} after {timeout}s")
-        return False
-
     def takeoff(self, altitude, timeout=60):
+        #TODO
         """
         Perform takeoff to specified altitude
-
-        Args:
-            altitude: Target altitude in meters
-            timeout: Timeout in seconds
         """
         if not self.connected:
             print("[PX4] Not connected to MAVROS, cannot takeoff")
@@ -281,13 +228,6 @@ class PX4Setters:
             if not self.is_armed():
                 if not self.arm_vehicle():
                     return False
-
-            # Some setups use GUIDED, some use OFFBOARD.
-            # Keep this comment because it is useful during debugging.
-            if not self.change_mode("GUIDED"):
-                print("[PX4][WARN] GUIDED mode failed. If using PX4, you may need OFFBOARD instead.")
-                return False
-
             req = CommandTOL.Request() # takeoff and land request
             req.altitude = float(altitude)
 
@@ -313,6 +253,7 @@ class PX4Setters:
             return False
 
     def land(self, timeout=60):
+        #TODO
         """
         Perform landing sequence
 
@@ -353,48 +294,8 @@ class PX4Setters:
     # Publisher-based control APIs
     # These do NOT use services.
     # They publish command messages continuously or on demand.
+    #OFFBOARD is stream based, not req/response, so we need these publishes
     # =========================================================
-
-    def goto_location(self, lat, lon, alt, timeout=60):
-        """
-        Navigate to a location using local setpoint publishing.
-
-        Args:
-            lat: Placeholder local x position
-            lon: Placeholder local y position
-            alt: Local z altitude in meters
-            timeout: Timeout in seconds
-
-        NOTE:
-        This currently publishes a local position setpoint.
-        It does NOT send a true GPS waypoint mission.
-        """
-        if not self.connected:
-            print("[PX4] Not connected to MAVROS, cannot navigate")
-            return False
-
-        alt = self._clamp_alt(float(alt))
-        print(f"[PX4] Navigating to ({lat:.6f}, {lon:.6f}, {alt}m)...")
-
-        try:
-            if not self.change_mode("GUIDED"):
-                print("[PX4][WARN] GUIDED mode failed. If using PX4, you may need OFFBOARD instead.")
-                return False
-
-            setpoint = PoseStamped()
-            setpoint.header.stamp = self.get_clock().now().to_msg() #set all the fields
-            setpoint.header.frame_id = "map"
-            setpoint.pose.position.x = lat
-            setpoint.pose.position.y = lon
-            setpoint.pose.position.z = alt
-
-            self.setpoint_pub.publish(setpoint)
-            print("[PX4] Waypoint sent")
-            return True
-        except Exception as e:
-            print(f"[PX4] Navigation failed: {str(e)}")
-            return False
-
     def send_position_setpoint(self, x, y, z):
         """
         Publish a local position setpoint.
@@ -471,7 +372,9 @@ class PX4Setters:
             return True
         except Exception as e:
             print(f"[PX4][ERROR] Failed to set velocity setpoint: {str(e)}")
-          
+            return False
+        
+
     def send_position_setpoint_gps(self, current_lat, current_lon, current_alt, target_lat, target_lon, target_alt, yaw_rate=0.0):
         """
         this function takes in current gps coordinates and a target gps coordinate, and calculates
