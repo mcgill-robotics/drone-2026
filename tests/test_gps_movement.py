@@ -7,11 +7,11 @@ This script demonstrates GPS-based movement in OFFBOARD mode:
 2. Switch to OFFBOARD mode
 3. Start background heartbeat stream
 4. Wait for manual RC arm
-5. Takeoff 5 meters using GPS coordinates (current location, local altitude frame)
+5. Takeoff 5 meters using the known-good local OFFBOARD setpoint path
 6. Fly to a target GPS location (if provided)
 7. Land and stop background stream
 
-Note: Altitudes used in setpoints are LOCAL (NED frame, relative to home), not MSL.
+Note: Altitudes used in setpoints are LOCAL (ENU frame, relative to home), not MSL.
 GPS coordinates are absolute (lat/lon), but altitude is relative to home position.
 """
 
@@ -24,7 +24,26 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 import rclpy
 import time
 import argparse
+import math
 from mission_controller.px4_interface import init_px4, boot_px4, stop_px4
+
+
+EARTH_RADIUS_M = 6_378_137.0
+ARRIVAL_TOLERANCE_M = 2.0
+SETPOINT_RATE_HZ = 10
+
+
+def gps_to_local_offset(origin_lat, origin_lon, target_lat, target_lon):
+    """
+    Convert a GPS target to an ENU local offset from the origin GPS coordinate.
+    Returns (east, north) in meters.
+    """
+    origin_lat_rad = math.radians(origin_lat)
+    d_lat = math.radians(target_lat - origin_lat)
+    d_lon = math.radians(target_lon - origin_lon)
+    north = d_lat * EARTH_RADIUS_M
+    east = d_lon * EARTH_RADIUS_M * math.cos(origin_lat_rad)
+    return east, north
 
 
 class GPSMovementTest:
@@ -74,52 +93,23 @@ class GPSMovementTest:
             if not self.px4.start_offboard_stream_background():
                 self.log("[TEST] Failed to start background stream")
                 return False
+            self.log("[TEST] ✓ Background stream started (10Hz heartbeat)")
 
             # Step 4: Wait for arming
             self.log("\n[TEST] Waiting for manual arm (60 seconds)...")
+            self.log("[TEST] Please arm the vehicle manually via RC transmitter or QGC")
             if not self.px4.wait_for_arm_with_heartbeat(timeout=60, heartbeat_rate=10):
                 self.log("[TEST] Arm timeout - vehicle was not armed")
                 return False
 
-            # Step 5: Get current position and GPS location
-            current_pos = self.px4.get_position()
-            current_gps = self.px4.get_gps_location()
-            if not current_pos or not current_gps:
-                self.log("[TEST] Cannot get position or GPS location")
+            # Step 5: Takeoff using the same path as test_hover.py. Do not use
+            # GPS setpoints here: the PX4 local z setpoint is relative, while
+            # GPS altitude is absolute MSL.
+            self.log("\n[TEST] Taking off to 5 meters...")
+            if not self.px4.takeoff(altitude=5, timeout=30):
+                self.log("[TEST] Takeoff failed")
                 return False
-            
-            current_lat = current_gps["latitude"]
-            current_lon = current_gps["longitude"]
-            current_z = current_pos["z"]  # Local altitude in NED frame
-            
-            self.log(f"\n[TEST] Current GPS: lat={current_lat:.6f}, lon={current_lon:.6f}")
-            self.log(f"[TEST] Current local altitude: {current_z:.2f}m (NED frame)")
-            
-            # Takeoff 5m up using GPS coordinates with LOCAL altitude
-            target_z_takeoff = current_z + 5
-            self.log(f"\n[TEST] Taking off to {target_z_takeoff:.2f}m (local) using GPS coordinates...")
-            self.px4.send_position_setpoint_gps(
-                current_lat, current_lon, current_z,
-                current_lat, current_lon, target_z_takeoff,
-                yaw_from_direction=True
-            )
-            
-            # Wait for takeoff to complete
-            start = time.time()
-            while (time.time() - start) < 30:  # 30s timeout
-                rclpy.spin_once(self.px4, timeout_sec=0.1)
-                
-                current_pos = self.px4.get_position()
-                if current_pos:
-                    current_z_now = current_pos["z"]
-                    if current_z_now >= (target_z_takeoff * 0.95):  # 95% of target
-                        self.log(f"[TEST] ✓ Takeoff complete, reached {current_z_now:.2f}m")
-                        break
-                
-                time.sleep(0.5)
-            else:
-                self.log("[TEST] Takeoff timeout")
-                return False
+            self.log("[TEST] ✓ Takeoff complete")
 
             # Step 6: Fly to target GPS location
             if not self.target_gps:
@@ -127,40 +117,63 @@ class GPSMovementTest:
                 time.sleep(10)
             else:
                 target_lat, target_lon, target_z = self.target_gps
-                self.log(f"\n[TEST] Flying to target GPS: lat={target_lat:.6f}, lon={target_lon:.6f}, alt={target_z:.2f}m (local)...")
-                
-                current_pos = self.px4.get_position()
-                current_z = current_pos["z"] if current_pos else 5  # Use current local altitude
-                
-                self.px4.send_position_setpoint_gps(
-                    current_lat, current_lon, current_z,
-                    target_lat, target_lon, target_z,
-                    yaw_from_direction=True
+                current_pos = self.px4.get_location()
+                current_gps = self.px4.get_gps_location()
+                if not current_pos or not current_gps:
+                    self.log("[TEST] Cannot get position or GPS location")
+                    return False
+
+                east, north = gps_to_local_offset(
+                    current_gps["latitude"],
+                    current_gps["longitude"],
+                    target_lat,
+                    target_lon,
                 )
-                
-                # Wait for drone to reach target (simplified: just wait a bit)
-                # In reality, you'd check distance to target
+                target_x = current_pos["x"] + east
+                target_y = current_pos["y"] + north
+
+                self.log(
+                    f"\n[TEST] Flying to target GPS: lat={target_lat:.6f}, "
+                    f"lon={target_lon:.6f}, alt={target_z:.2f}m local"
+                )
+                self.log(f"[TEST] Offset (E,N): ({east:.2f}m, {north:.2f}m)")
+                self.log(
+                    f"[TEST] Local target: x={target_x:.2f}, "
+                    f"y={target_y:.2f}, z={target_z:.2f}"
+                )
+
+                dt = 1.0 / SETPOINT_RATE_HZ
                 start = time.time()
-                while (time.time() - start) < 60:  # 60s timeout to reach target
-                    rclpy.spin_once(self.px4, timeout_sec=0.1)
-                    
-                    current_gps = self.px4.get_gps_location()
-                    if current_gps:
-                        curr_lat = current_gps["latitude"]
-                        curr_lon = current_gps["longitude"]
-                        
-                        # Calculate distance to target (simplified, not accounting for altitude much)
-                        dlat = (target_lat - curr_lat) * 111320  # meters per degree lat
-                        dlon = (target_lon - curr_lon) * 111320 * 0.707  # rough estimate for lon
-                        distance = (dlat**2 + dlon**2)**0.5
-                        
-                        if distance < 2:  # Within 2 meters
-                            self.log(f"[TEST] ✓ Reached target GPS (distance: {distance:.2f}m)")
+                last_log = 0
+                while (time.time() - start) < 60:
+                    self.px4.send_position_setpoint(
+                        target_x,
+                        target_y,
+                        target_z,
+                        yaw_from_direction=True,
+                    )
+                    rclpy.spin_once(self.px4, timeout_sec=0.0)
+
+                    current_pos = self.px4.get_location()
+                    if current_pos:
+                        distance = math.sqrt(
+                            (current_pos["x"] - target_x) ** 2
+                            + (current_pos["y"] - target_y) ** 2
+                            + (current_pos["z"] - target_z) ** 2
+                        )
+                        now = time.time()
+                        if now - last_log >= 1.0:
+                            self.log(f"[TEST] Distance to target: {distance:.2f}m")
+                            last_log = now
+
+                        if distance <= ARRIVAL_TOLERANCE_M:
+                            self.log(f"[TEST] ✓ Reached target (distance: {distance:.2f}m)")
                             break
-                    
-                    time.sleep(1)
+
+                    time.sleep(dt)
                 else:
-                    self.log("[TEST] Timeout reaching target (may still be in progress)")
+                    self.log("[TEST] Timeout reaching target")
+                    return False
 
             # Step 7: Land
             self.log("\n[TEST] Landing...")
