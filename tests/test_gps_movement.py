@@ -11,8 +11,8 @@ This script demonstrates GPS-based movement in OFFBOARD mode:
 6. Fly to a target GPS location (if provided)
 7. Land and stop background stream
 
-Note: Altitudes used in setpoints are LOCAL (ENU frame, relative to home), not MSL.
-GPS coordinates are absolute (lat/lon), but altitude is relative to home position.
+Note: GPS coordinates are absolute lat/lon. The optional target altitude is
+relative to the local altitude at launch, not MSL.
 """
 
 import sys
@@ -32,6 +32,13 @@ EARTH_RADIUS_M = 6_378_137.0
 ARRIVAL_TOLERANCE_M = 2.0
 SETPOINT_RATE_HZ = 10
 ALTITUDE_TOLERANCE_M = 0.75
+MOTION_LIMIT_PARAMS = (
+    ("MPC_XY_VEL_MAX", 2.0),
+    ("MPC_XY_CRUISE", 1.0),
+    ("MPC_VEL_MANUAL", 2.0),
+    ("MPC_LAND_SPEED", 0.4),
+    ("MPC_LAND_CRWL", 0.2),
+)
 
 
 def gps_to_local_offset(origin_lat, origin_lon, target_lat, target_lon):
@@ -68,6 +75,16 @@ class GPSMovementTest:
         if self.verbose:
             print(msg)
 
+    def configure_motion_limits(self):
+        """Configure conservative PX4 motion limits for this test."""
+        self.log("\n[TEST] Setting conservative PX4 motion limits...")
+        for name, value in MOTION_LIMIT_PARAMS:
+            if not self.px4.set_param(name, value):
+                self.log(f"[TEST] Failed to set {name}")
+                return False
+        self.log("[TEST] ✓ Motion limits configured")
+        return True
+
     def test_gps_movement(self):
         """Test GPS-based movement in OFFBOARD mode"""
         self.log("\n" + "="*70)
@@ -81,6 +98,9 @@ class GPSMovementTest:
                 self.log("[TEST] Not connected to MAVROS")
                 return False
             self.log("[TEST] ✓ Connected to MAVROS")
+
+            if not self.configure_motion_limits():
+                return False
 
             # Step 2: Switch to OFFBOARD mode
             self.log("\n[TEST] Switching to OFFBOARD mode...")
@@ -102,6 +122,12 @@ class GPSMovementTest:
             if not self.px4.wait_for_arm_with_heartbeat(timeout=60, heartbeat_rate=10):
                 self.log("[TEST] Arm timeout - vehicle was not armed")
                 return False
+
+            launch_pos = self.px4.get_location()
+            if not launch_pos:
+                self.log("[TEST] Cannot get launch position before takeoff")
+                return False
+            launch_alt = launch_pos["z"]
 
             # Step 5: Takeoff using the same path as test_hover.py. Do not use
             # GPS setpoints here: the PX4 local z setpoint is relative, while
@@ -138,7 +164,7 @@ class GPSMovementTest:
                 )
                 target_x = current_pos["x"] + east
                 target_y = current_pos["y"] + north
-                target_alt = hover_alt if target_z is None else target_z
+                target_alt = hover_alt if target_z is None else launch_alt + target_z
 
                 self.log(
                     f"\n[TEST] Flying to target GPS: lat={target_lat:.6f}, "
@@ -146,6 +172,11 @@ class GPSMovementTest:
                 )
                 if target_z is None:
                     self.log(f"[TEST] Holding post-takeoff altitude: {target_alt:.2f}m")
+                else:
+                    self.log(
+                        f"[TEST] Target altitude: {target_z:.2f}m above launch "
+                        f"(local z={target_alt:.2f}m)"
+                    )
                 self.log(f"[TEST] Offset (E,N): ({east:.2f}m, {north:.2f}m)")
                 self.log(
                     f"[TEST] Local target: x={target_x:.2f}, "
@@ -200,7 +231,7 @@ class GPSMovementTest:
 
             # Step 7: Land
             self.log("\n[TEST] Landing...")
-            if not self.px4.land(timeout=30):
+            if not self.px4.land(timeout=60):
                 self.log("[TEST] Landing failed")
                 return False
             self.log("[TEST] ✓ Landing complete")
@@ -267,9 +298,8 @@ def main():
         "--target",
         type=str,
         default=None,
-        help='Target GPS coordinates as "lat,lon[,alt_local]". If altitude is omitted, hold post-takeoff altitude.',
+        help='Target GPS coordinates as "lat,lon[,alt_agl]". If altitude is omitted, hold post-takeoff altitude.',
     )
-
     args = parser.parse_args()
 
     # Parse target GPS if provided
@@ -281,10 +311,10 @@ def main():
                 raise ValueError("expected lat,lon or lat,lon,alt")
             target_alt = float(parts[2]) if len(parts) == 3 else None
             target_gps = (float(parts[0]), float(parts[1]), target_alt)
-            alt_text = f"{target_alt}m local" if target_alt is not None else "hold current hover altitude"
+            alt_text = f"{target_alt}m above launch" if target_alt is not None else "hold current hover altitude"
             print(f"[MAIN] Target GPS: lat={target_gps[0]}, lon={target_gps[1]}, alt={alt_text}")
         except (ValueError, IndexError):
-            print("[MAIN] Invalid target format. Use: 'lat,lon' or 'lat,lon,alt_local'")
+            print("[MAIN] Invalid target format. Use: 'lat,lon' or 'lat,lon,alt_agl'")
             return False
 
     # Determine connection method

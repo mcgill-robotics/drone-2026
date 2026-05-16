@@ -76,6 +76,39 @@ class PX4Setters:
         print(f"[PX4] Altitude limit: {feet} ft ({meters:.2f} m)")
         return True
 
+    def set_param(self, name, value, timeout=10, integer=False):
+        """Set a PX4/MAVROS parameter by name."""
+        if not self.connected:
+            print(f"[PX4] Not connected, cannot set {name}")
+            return False
+
+        if not self.param_set_client.wait_for_service(timeout_sec=5):
+            print("[PX4] /param/set service unavailable")
+            return False
+
+        req = ParamSet.Request()
+        req.param_id = str(name)
+        req.value = ParamValue(
+            integer=int(value) if integer else 0,
+            real=0.0 if integer else float(value),
+        )
+
+        try:
+            future = self.param_set_client.call_async(req)
+            start = time.time()
+            while not future.done() and (time.time() - start) < timeout:
+                rclpy.spin_once(self, timeout_sec=0.1)
+
+            if future.done() and future.result() and future.result().success:
+                print(f"[PX4] {name} set to {value}")
+                return True
+
+            print(f"[PX4] Failed to set {name}")
+            return False
+        except Exception as e:
+            print(f"[PX4] Failed to set {name}: {str(e)}")
+            return False
+
     def _clamp_alt(self, z):
         """Clamp a requested z (meters) against the configured limit. Warns on clamp."""
         if self._max_alt_m is None or z is None:
@@ -279,54 +312,60 @@ class PX4Setters:
 
     def land(self, timeout=60):
         """
-        Perform landing sequence using position setpoint in OFFBOARD mode.
-        
-        Sends a position setpoint with altitude 0 (ground level) at current x, y location.
-        The heartbeat will continuously republish this position, maintaining the descent
-        until the drone reaches the ground. Locks in the current yaw heading.
+        Land using PX4's built-in landing behavior via MAVROS.
+
+        This sends MAV_CMD_NAV_LAND through /cmd/land instead of commanding an
+        OFFBOARD position setpoint to local z=0. PX4 then owns descent,
+        touchdown detection, and landing-specific limits.
         """
         if not self.connected:
             print("[PX4] Not connected to MAVROS, cannot land")
             return False
 
-        # Get current position
-        if not self.current_position:
-            print("[PX4] Cannot land: current position unavailable")
+        if not self.land_client.wait_for_service(timeout_sec=5):
+            print("[PX4] /cmd/land service unavailable")
             return False
-        
-        current = self.current_position.pose.position
-        current_orientation = self.current_position.pose.orientation
-        target_alt = 0.0  # Land at ground level
-        
-        # Extract yaw from current orientation quaternion
-        qx = current_orientation.x
-        qy = current_orientation.y
-        qz = current_orientation.z
-        qw = current_orientation.w
-        yaw = math.atan2(2.0 * (qw * qz + qx * qy), 1.0 - 2.0 * (qy * qy + qz * qz))
-        
-        print(f"[PX4] Landing to ground (current: {current.z:.2f}m)...")
-        print(f"[PX4] Locking yaw heading: {math.degrees(yaw):.1f}°")
-        
+
+        print("[PX4] Requesting PX4 landing mode...")
         try:
-            # Send position setpoint at ground level with yaw locked (heartbeat will maintain it)
-            if not self.send_position_setpoint(current.x, current.y, target_alt, yaw=yaw, yaw_from_direction=True):
-                print("[PX4] Failed to send landing position setpoint")
-                return False
-            
-            # Wait until target altitude is reached
+            req = CommandTOL.Request()
+            req.min_pitch = 0.0
+            req.yaw = 0.0
+            req.latitude = 0.0
+            req.longitude = 0.0
+            req.altitude = 0.0
+
+            future = self.land_client.call_async(req)
+            start = time.time()
+            while not future.done() and (time.time() - start) < 5:
+                rclpy.spin_once(self, timeout_sec=0.1)
+                time.sleep(0.1)
+
+            if future.done():
+                result = future.result()
+                if not (result and result.success):
+                    print("[PX4] Landing command rejected")
+                    return False
+                print("[PX4] Landing command accepted")
+            else:
+                print("[PX4] Landing command response timed out; monitoring landing state")
+
             start = time.time()
             while (time.time() - start) < timeout:
                 rclpy.spin_once(self, timeout_sec=0.1)
-                
+
+                if self.is_landed():
+                    print("[PX4] Landing complete, vehicle reports landed")
+                    return True
+
                 if self.current_position:
                     current_alt = self.current_position.pose.position.z
-                    if current_alt < 0.1:  # Close to ground
+                    if current_alt < 0.1:
                         print(f"[PX4] Landing complete, reached {current_alt:.2f}m")
                         return True
-                
+
                 time.sleep(0.5)
-            
+
             print("[PX4] Landing timeout")
             return False
         except Exception as e:
