@@ -104,7 +104,6 @@ class HoverTest:
                 self.log("[TEST] ✓ Vehicle armed via API")
             
             # Step 5: Takeoff to 5 meters
-            self.log("NEXT STEP")
             self.log("\n[TEST] Taking off to 5 meters...")
             if not self.px4.takeoff(altitude=5, timeout=30):
                 self.log("[TEST] Takeoff failed")
