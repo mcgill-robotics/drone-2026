@@ -455,10 +455,21 @@ class PX4Setters:
             return False
         
 
-    def send_position_setpoint_gps(self, current_lat, current_lon, current_alt, target_lat, target_lon, target_alt, yaw_rate=0.0):
+    def send_position_setpoint_gps(self, current_lat, current_lon, current_alt, target_lat, target_lon, target_alt, yaw_rate=0.0, yaw_from_direction=False):
         """
-        this function takes in current gps coordinates and a target gps coordinate, and calculates
-        where to go direction wise, by converting gps to Nort East South (NED) displacement vector.
+        Convert GPS coordinates to local NED and send as position setpoint.
+        
+        Takes in current GPS coordinates and a target GPS coordinate, calculates
+        the NED displacement vector, and publishes it as a position setpoint.
+        
+        Args:
+            current_lat, current_lon, current_alt: Current GPS location
+            target_lat, target_lon, target_alt: Target GPS location
+            yaw_rate: Deprecated parameter (kept for compatibility)
+            yaw_from_direction: If True, automatically face towards the target direction
+        
+        Returns:
+            Tuple of (north, east, down, distance) in meters
         """
         latitude1_rad = math.radians(current_lat)
         longitude1_rad = math.radians(current_lon)
@@ -474,7 +485,7 @@ class PX4Setters:
         down = -dalt #negative down = up
 
         distance = math.sqrt(north**2 + east**2 + down**2)
-        self.send_position_setpoint(north, east, down)
+        self.send_position_setpoint(north, east, down, yaw_from_direction=yaw_from_direction)
         
         return north, east, down, distance
 
