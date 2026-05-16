@@ -25,7 +25,7 @@ from .controller import MissionController
 from .driver import Driver
 
 # Stub functions
-from stubs import (
+from .stubs import (
     goto_drone, run_lap_algorithm,
     boustrophedon_search, at_position, pad_has_extinguisher,
     drop_payload, inside_boundary, extinguish_fire, take_survey_photos,
