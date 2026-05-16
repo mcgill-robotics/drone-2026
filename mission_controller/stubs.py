@@ -4,7 +4,7 @@ These functions interface with PX4 autopilot system via MAVROS
 """
 
 import math
-from px4_interface import get_px4
+from .px4_interface import get_px4
 
 
 def goto_drone(target):
