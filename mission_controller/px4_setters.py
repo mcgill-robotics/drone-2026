@@ -217,6 +217,7 @@ class PX4Setters:
         
         Sends a position setpoint with the target altitude. The heartbeat will continuously
         republish this position, maintaining the climb until the target altitude is reached.
+        Locks in the current yaw heading to prevent unwanted rotation.
         """
         if not self.connected:
             print("[PX4] Not connected to MAVROS, cannot takeoff")
@@ -230,9 +231,21 @@ class PX4Setters:
             return False
         
         current = self.current_position.pose.position
+        current_orientation = self.current_position.pose.orientation
         target_alt = current.z + altitude
         
+        # Extract yaw from current orientation quaternion
+        # For a quaternion (x, y, z, w), yaw = atan2(2*(w*z + x*y), 1 - 2*(y*z + z*z))
+        # Simplified for roll=0, pitch=0: yaw = atan2(2*w*z, 1 - 2*z*z)
+    
+        qx = current_orientation.x
+        qy = current_orientation.y
+        qz = current_orientation.z
+        qw = current_orientation.w
+        yaw = math.atan2(2.0 * (qw * qz + qx * qy), 1.0 - 2.0 * (qy * qy + qz * qz))
+        
         print(f"[PX4] Taking off to {target_alt:.2f}m (current: {current.z:.2f}m, climbing {altitude:.2f}m)...")
+        print(f"[PX4] Locking yaw heading: {math.degrees(yaw):.1f}°")
         
         try:
             # Arm if not already armed
@@ -240,10 +253,8 @@ class PX4Setters:
                 if not self.arm_vehicle():
                     return False
             
-            # Send position setpoint (heartbeat will maintain it)
-            #the send position is actually absolute, so even if it gets called infinitely it will
-            #stay at 5m up
-            if not self.send_position_setpoint(current.x, current.y, target_alt):
+            # Send position setpoint with current yaw locked (heartbeat will maintain it)
+            if not self.send_position_setpoint(current.x, current.y, target_alt, yaw=yaw, yaw_from_direction=True):
                 print("[PX4] Failed to send takeoff position setpoint")
                 return False
             
@@ -272,7 +283,7 @@ class PX4Setters:
         
         Sends a position setpoint with altitude 0 (ground level) at current x, y location.
         The heartbeat will continuously republish this position, maintaining the descent
-        until the drone reaches the ground.
+        until the drone reaches the ground. Locks in the current yaw heading.
         """
         if not self.connected:
             print("[PX4] Not connected to MAVROS, cannot land")
@@ -284,13 +295,22 @@ class PX4Setters:
             return False
         
         current = self.current_position.pose.position
+        current_orientation = self.current_position.pose.orientation
         target_alt = 0.0  # Land at ground level
         
+        # Extract yaw from current orientation quaternion
+        qx = current_orientation.x
+        qy = current_orientation.y
+        qz = current_orientation.z
+        qw = current_orientation.w
+        yaw = math.atan2(2.0 * (qw * qz + qx * qy), 1.0 - 2.0 * (qy * qy + qz * qz))
+        
         print(f"[PX4] Landing to ground (current: {current.z:.2f}m)...")
+        print(f"[PX4] Locking yaw heading: {math.degrees(yaw):.1f}°")
         
         try:
-            # Send position setpoint at ground level (heartbeat will maintain it)
-            if not self.send_position_setpoint(current.x, current.y, target_alt):
+            # Send position setpoint at ground level with yaw locked (heartbeat will maintain it)
+            if not self.send_position_setpoint(current.x, current.y, target_alt, yaw=yaw, yaw_from_direction=True):
                 print("[PX4] Failed to send landing position setpoint")
                 return False
             
@@ -319,9 +339,9 @@ class PX4Setters:
     # They publish command messages continuously or on demand.
     #OFFBOARD is stream based, not req/response, so we need these publishes
     # =========================================================
-    def send_position_setpoint(self, x, y, z):
+    def send_position_setpoint(self, x, y, z, yaw=None, yaw_from_direction=False):
         """
-        Publish a local position setpoint.
+        Publish a local position setpoint with optional yaw heading.
 
         NOTE:
         This is a topic publish , not a service call. (messages vs services)
@@ -331,6 +351,12 @@ class PX4Setters:
         When a background heartbeat is running, this setpoint is stored and
         republished by the heartbeat thread at its frequency. This ensures the
         position target is maintained without being overwritten by other messages.
+        
+        Args:
+            x, y, z: Position in local NED frame (meters)
+            yaw: Heading in radians (optional). If None and yaw_from_direction=False, doesn't set orientation.
+            yaw_from_direction: If True, automatically calculate yaw from current position towards target (x, y).
+                               This makes the drone face the direction it's moving. Overrides explicit yaw parameter.
         """
         try:
             # Record that user just published (heartbeat will skip if recent)
@@ -346,6 +372,37 @@ class PX4Setters:
             msg.pose.position.x = x_clamped
             msg.pose.position.y = y_clamped
             msg.pose.position.z = z_clamped
+            
+            # Calculate yaw from direction if requested
+            calculated_yaw = None
+            if yaw_from_direction and self.current_position:
+                # Get current position
+                current = self.current_position.pose.position
+                # Calculate vector from current to target
+                dx = x_clamped - current.x
+                dy = y_clamped - current.y
+                # Calculate yaw from direction (atan2 gives angle from +x axis)
+                calculated_yaw = math.atan2(dy, dx)
+            
+            # Determine which yaw to use: calculated > explicit > none
+            final_yaw = calculated_yaw if calculated_yaw is not None else yaw
+            
+            # Set orientation (yaw) if provided
+            if final_yaw is not None:
+                # Convert yaw to quaternion (roll=0, pitch=0, yaw=yaw)
+                # Using euler to quaternion conversion: q = [qx, qy, qz, qw]
+                yaw_f = float(final_yaw)
+                half_yaw = yaw_f / 2.0
+                msg.pose.orientation.x = 0.0
+                msg.pose.orientation.y = 0.0
+                msg.pose.orientation.z = math.sin(half_yaw)
+                msg.pose.orientation.w = math.cos(half_yaw)
+            else:
+                # Default orientation (no rotation)
+                msg.pose.orientation.x = 0.0
+                msg.pose.orientation.y = 0.0
+                msg.pose.orientation.z = 0.0
+                msg.pose.orientation.w = 1.0
             
             # Store message and publisher for heartbeat to republish
             self._last_command_message = msg
@@ -398,10 +455,21 @@ class PX4Setters:
             return False
         
 
-    def send_position_setpoint_gps(self, current_lat, current_lon, current_alt, target_lat, target_lon, target_alt, yaw_rate=0.0):
+    def send_position_setpoint_gps(self, current_lat, current_lon, current_alt, target_lat, target_lon, target_alt, yaw_rate=0.0, yaw_from_direction=False):
         """
-        this function takes in current gps coordinates and a target gps coordinate, and calculates
-        where to go direction wise, by converting gps to Nort East South (NED) displacement vector.
+        Convert GPS coordinates to local NED and send as position setpoint.
+        
+        Takes in current GPS coordinates and a target GPS coordinate, calculates
+        the NED displacement vector, and publishes it as a position setpoint.
+        
+        Args:
+            current_lat, current_lon, current_alt: Current GPS location
+            target_lat, target_lon, target_alt: Target GPS location
+            yaw_rate: Deprecated parameter (kept for compatibility)
+            yaw_from_direction: If True, automatically face towards the target direction
+        
+        Returns:
+            Tuple of (north, east, down, distance) in meters
         """
         latitude1_rad = math.radians(current_lat)
         longitude1_rad = math.radians(current_lon)
@@ -417,7 +485,7 @@ class PX4Setters:
         down = -dalt #negative down = up
 
         distance = math.sqrt(north**2 + east**2 + down**2)
-        self.send_position_setpoint(north, east, down)
+        self.send_position_setpoint(north, east, down, yaw_from_direction=yaw_from_direction)
         
         return north, east, down, distance
 
