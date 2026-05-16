@@ -459,11 +459,12 @@ class PX4Setters:
         """
         Convert GPS coordinates to local NED and send as position setpoint.
         
-        Takes in current GPS coordinates and a target GPS coordinate, calculates
-        the NED displacement vector, and publishes it as a position setpoint.
+        Converts absolute GPS target coordinates to local NED position relative to HOME.
+        The position setpoint in the map frame is relative to the home position where
+        the drone armed, not the current position.
         
         Args:
-            current_lat, current_lon, current_alt: Current GPS location
+            current_lat, current_lon, current_alt: Current GPS location (used only for yaw direction)
             target_lat, target_lon, target_alt: Target GPS location
             yaw_rate: Deprecated parameter (kept for compatibility)
             yaw_from_direction: If True, automatically face towards the target direction
@@ -471,14 +472,23 @@ class PX4Setters:
         Returns:
             Tuple of (north, east, down, distance) in meters
         """
-        latitude1_rad = math.radians(current_lat)
-        longitude1_rad = math.radians(current_lon)
-        latitude2_rad = math.radians(target_lat)
-        longitude2_rad = math.radians(target_lon)
-
-        dlat = target_lat - current_lat
-        dlong = target_lon - current_lon
-        dalt = target_alt - current_alt
+        # Get home position (origin of map frame)
+        home = self.get_home_location()
+        if not home:
+            print("[PX4] Cannot send GPS setpoint - home position not available yet")
+            return None
+        
+        home_lat = home["latitude"]
+        home_lon = home["longitude"]
+        home_alt = home["altitude"]
+        
+        # Calculate displacement from HOME to TARGET (not from current to target)
+        # The map frame is centered at home, so we need home-relative coordinates
+        latitude1_rad = math.radians(home_lat)  # Use HOME latitude for cosine calculation
+        
+        dlat = target_lat - home_lat  # Displacement from home to target
+        dlong = target_lon - home_lon
+        dalt = target_alt - home_alt
 
         north = dlat * 111320
         east = dlong * 111320 * math.cos(latitude1_rad)
