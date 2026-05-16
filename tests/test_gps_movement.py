@@ -31,6 +31,7 @@ from mission_controller.px4_interface import init_px4, boot_px4, stop_px4
 EARTH_RADIUS_M = 6_378_137.0
 ARRIVAL_TOLERANCE_M = 2.0
 SETPOINT_RATE_HZ = 10
+ALTITUDE_TOLERANCE_M = 0.75
 
 
 def gps_to_local_offset(origin_lat, origin_lon, target_lat, target_lon):
@@ -111,6 +112,12 @@ class GPSMovementTest:
                 return False
             self.log("[TEST] ✓ Takeoff complete")
 
+            hover_pos = self.px4.get_location()
+            if not hover_pos:
+                self.log("[TEST] Cannot get hover position after takeoff")
+                return False
+            hover_alt = hover_pos["z"]
+
             # Step 6: Fly to target GPS location
             if not self.target_gps:
                 self.log("\n[TEST] No target GPS provided. Hovering for 10 seconds...")
@@ -131,44 +138,60 @@ class GPSMovementTest:
                 )
                 target_x = current_pos["x"] + east
                 target_y = current_pos["y"] + north
+                target_alt = hover_alt if target_z is None else target_z
 
                 self.log(
                     f"\n[TEST] Flying to target GPS: lat={target_lat:.6f}, "
-                    f"lon={target_lon:.6f}, alt={target_z:.2f}m local"
+                    f"lon={target_lon:.6f}, alt={target_alt:.2f}m local"
                 )
+                if target_z is None:
+                    self.log(f"[TEST] Holding post-takeoff altitude: {target_alt:.2f}m")
                 self.log(f"[TEST] Offset (E,N): ({east:.2f}m, {north:.2f}m)")
                 self.log(
                     f"[TEST] Local target: x={target_x:.2f}, "
-                    f"y={target_y:.2f}, z={target_z:.2f}"
+                    f"y={target_y:.2f}, z={target_alt:.2f}"
                 )
 
                 dt = 1.0 / SETPOINT_RATE_HZ
                 start = time.time()
                 last_log = 0
                 while (time.time() - start) < 60:
+                    current_pos = self.px4.get_location()
+                    if not current_pos:
+                        time.sleep(dt)
+                        continue
+
+                    horizontal_distance = math.sqrt(
+                        (current_pos["x"] - target_x) ** 2
+                        + (current_pos["y"] - target_y) ** 2
+                    )
+
                     self.px4.send_position_setpoint(
                         target_x,
                         target_y,
-                        target_z,
+                        target_alt,
                         yaw_from_direction=True,
                     )
                     rclpy.spin_once(self.px4, timeout_sec=0.0)
 
-                    current_pos = self.px4.get_location()
-                    if current_pos:
-                        distance = math.sqrt(
-                            (current_pos["x"] - target_x) ** 2
-                            + (current_pos["y"] - target_y) ** 2
-                            + (current_pos["z"] - target_z) ** 2
+                    altitude_error = abs(current_pos["z"] - target_alt)
+                    now = time.time()
+                    if now - last_log >= 1.0:
+                        self.log(
+                            f"[TEST] Distance XY: {horizontal_distance:.2f}m, "
+                            f"alt error: {altitude_error:.2f}m"
                         )
-                        now = time.time()
-                        if now - last_log >= 1.0:
-                            self.log(f"[TEST] Distance to target: {distance:.2f}m")
-                            last_log = now
+                        last_log = now
 
-                        if distance <= ARRIVAL_TOLERANCE_M:
-                            self.log(f"[TEST] ✓ Reached target (distance: {distance:.2f}m)")
-                            break
+                    if (
+                        horizontal_distance <= ARRIVAL_TOLERANCE_M
+                        and altitude_error <= ALTITUDE_TOLERANCE_M
+                    ):
+                        self.log(
+                            f"[TEST] ✓ Reached target "
+                            f"(xy={horizontal_distance:.2f}m, alt_err={altitude_error:.2f}m)"
+                        )
+                        break
 
                     time.sleep(dt)
                 else:
@@ -244,7 +267,7 @@ def main():
         "--target",
         type=str,
         default=None,
-        help='Target GPS coordinates as "lat,lon,alt_local" where alt is LOCAL altitude in meters (e.g., "37.7749,-122.4194,10")',
+        help='Target GPS coordinates as "lat,lon[,alt_local]". If altitude is omitted, hold post-takeoff altitude.',
     )
 
     args = parser.parse_args()
@@ -254,10 +277,14 @@ def main():
     if args.target:
         try:
             parts = args.target.split(",")
-            target_gps = (float(parts[0]), float(parts[1]), float(parts[2]))
-            print(f"[MAIN] Target GPS: lat={target_gps[0]}, lon={target_gps[1]}, alt={target_gps[2]}")
+            if len(parts) not in (2, 3):
+                raise ValueError("expected lat,lon or lat,lon,alt")
+            target_alt = float(parts[2]) if len(parts) == 3 else None
+            target_gps = (float(parts[0]), float(parts[1]), target_alt)
+            alt_text = f"{target_alt}m local" if target_alt is not None else "hold current hover altitude"
+            print(f"[MAIN] Target GPS: lat={target_gps[0]}, lon={target_gps[1]}, alt={alt_text}")
         except (ValueError, IndexError):
-            print("[MAIN] Invalid target format. Use: 'lat,lon,alt'")
+            print("[MAIN] Invalid target format. Use: 'lat,lon' or 'lat,lon,alt_local'")
             return False
 
     # Determine connection method
