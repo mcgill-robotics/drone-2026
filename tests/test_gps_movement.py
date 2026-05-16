@@ -7,9 +7,12 @@ This script demonstrates GPS-based movement in OFFBOARD mode:
 2. Switch to OFFBOARD mode
 3. Start background heartbeat stream
 4. Wait for manual RC arm
-5. Takeoff 5 meters using GPS coordinates (current location + altitude)
-6. Fly to a target GPS location
+5. Takeoff 5 meters using GPS coordinates (current location, local altitude frame)
+6. Fly to a target GPS location (if provided)
 7. Land and stop background stream
+
+Note: Altitudes used in setpoints are LOCAL (NED frame, relative to home), not MSL.
+GPS coordinates are absolute (lat/lon), but altitude is relative to home position.
 """
 
 import sys
@@ -78,24 +81,26 @@ class GPSMovementTest:
                 self.log("[TEST] Arm timeout - vehicle was not armed")
                 return False
 
-            # Step 5: Get current GPS location and takeoff
+            # Step 5: Get current position and GPS location
+            current_pos = self.px4.get_position()
             current_gps = self.px4.get_gps_location()
-            if not current_gps:
-                self.log("[TEST] Cannot get GPS location")
+            if not current_pos or not current_gps:
+                self.log("[TEST] Cannot get position or GPS location")
                 return False
             
             current_lat = current_gps["latitude"]
             current_lon = current_gps["longitude"]
-            current_alt = current_gps["altitude"]
+            current_z = current_pos["z"]  # Local altitude in NED frame
             
-            self.log(f"\n[TEST] Current GPS: lat={current_lat:.6f}, lon={current_lon:.6f}, alt={current_alt:.2f}m")
+            self.log(f"\n[TEST] Current GPS: lat={current_lat:.6f}, lon={current_lon:.6f}")
+            self.log(f"[TEST] Current local altitude: {current_z:.2f}m (NED frame)")
             
-            # Takeoff 5m up using GPS coordinates
-            target_alt_takeoff = current_alt + 5
-            self.log(f"\n[TEST] Taking off to {target_alt_takeoff:.2f}m using GPS coordinates...")
+            # Takeoff 5m up using GPS coordinates with LOCAL altitude
+            target_z_takeoff = current_z + 5
+            self.log(f"\n[TEST] Taking off to {target_z_takeoff:.2f}m (local) using GPS coordinates...")
             self.px4.send_position_setpoint_gps(
-                current_lat, current_lon, current_alt,
-                current_lat, current_lon, target_alt_takeoff,
+                current_lat, current_lon, current_z,
+                current_lat, current_lon, target_z_takeoff,
                 yaw_from_direction=True
             )
             
@@ -104,11 +109,11 @@ class GPSMovementTest:
             while (time.time() - start) < 30:  # 30s timeout
                 rclpy.spin_once(self.px4, timeout_sec=0.1)
                 
-                current_gps = self.px4.get_gps_location()
-                if current_gps:
-                    current_alt_now = current_gps["altitude"]
-                    if current_alt_now >= (target_alt_takeoff * 0.95):  # 95% of target
-                        self.log(f"[TEST] ✓ Takeoff complete, reached {current_alt_now:.2f}m")
+                current_pos = self.px4.get_position()
+                if current_pos:
+                    current_z_now = current_pos["z"]
+                    if current_z_now >= (target_z_takeoff * 0.95):  # 95% of target
+                        self.log(f"[TEST] ✓ Takeoff complete, reached {current_z_now:.2f}m")
                         break
                 
                 time.sleep(0.5)
@@ -121,12 +126,15 @@ class GPSMovementTest:
                 self.log("\n[TEST] No target GPS provided. Hovering for 10 seconds...")
                 time.sleep(10)
             else:
-                target_lat, target_lon, target_alt = self.target_gps
-                self.log(f"\n[TEST] Flying to target GPS: lat={target_lat:.6f}, lon={target_lon:.6f}, alt={target_alt:.2f}m...")
+                target_lat, target_lon, target_z = self.target_gps
+                self.log(f"\n[TEST] Flying to target GPS: lat={target_lat:.6f}, lon={target_lon:.6f}, alt={target_z:.2f}m (local)...")
+                
+                current_pos = self.px4.get_position()
+                current_z = current_pos["z"] if current_pos else 5  # Use current local altitude
                 
                 self.px4.send_position_setpoint_gps(
-                    current_lat, current_lon, current_alt,
-                    target_lat, target_lon, target_alt,
+                    current_lat, current_lon, current_z,
+                    target_lat, target_lon, target_z,
                     yaw_from_direction=True
                 )
                 
@@ -140,7 +148,6 @@ class GPSMovementTest:
                     if current_gps:
                         curr_lat = current_gps["latitude"]
                         curr_lon = current_gps["longitude"]
-                        curr_alt = current_gps["altitude"]
                         
                         # Calculate distance to target (simplified, not accounting for altitude much)
                         dlat = (target_lat - curr_lat) * 111320  # meters per degree lat
@@ -224,7 +231,7 @@ def main():
         "--target",
         type=str,
         default=None,
-        help='Target GPS coordinates as "lat,lon,alt" (e.g., "37.7749,-122.4194,10")',
+        help='Target GPS coordinates as "lat,lon,alt_local" where alt is LOCAL altitude in meters (e.g., "37.7749,-122.4194,10")',
     )
 
     args = parser.parse_args()
