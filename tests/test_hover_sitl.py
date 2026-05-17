@@ -3,7 +3,7 @@
 OFFBOARD Hover Test - SITL Version
 
 This script demonstrates basic OFFBOARD control with takeoff/land in SITL:
-1. Boot PX4 SITL and connect to MAVROS
+1. Connect to existing PX4 SITL and MAVROS (assumes already booted)
 2. Switch to OFFBOARD mode
 3. Start background heartbeat stream (maintains setpoints)
 4. Automatically arm via API (no manual RC needed in SITL)
@@ -14,6 +14,7 @@ This script demonstrates basic OFFBOARD control with takeoff/land in SITL:
 
 Usage:
     python3 test_hover_sitl.py
+    (Run with Gazebo + PX4 SITL already running)
 """
 
 import sys
@@ -25,7 +26,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 import rclpy
 import time
 import argparse
-from mission_controller.px4_interface import init_px4, boot_px4, stop_px4
+from mission_controller.px4_interface import init_px4
 
 
 class HoverTest:
@@ -150,19 +151,7 @@ def main():
     rclpy.init()
 
     try:
-        # Boot PX4 SITL
-        print("[MAIN] Booting PX4 SITL...")
-        fcu_url = "udp://127.0.0.1:14540"
-        print("[MAIN] Using SITL (UDP)")
-        
-        boot_px4(fcu_url=fcu_url)
-        print("[MAIN] PX4 booted")
-
-        # Wait for MAVROS to initialize
-        print("[MAIN] Waiting 10s for MAVROS initialization...")
-        time.sleep(10)
-
-        # Initialize PX4 interface
+        # Initialize PX4 interface (connect to existing MAVROS)
         print("[MAIN] Initializing PX4Interface...")
         px4 = init_px4()
 
@@ -194,7 +183,6 @@ def main():
     finally:
         # Cleanup
         print("[MAIN] Shutting down...")
-        stop_px4()
         rclpy.shutdown()
 
 
