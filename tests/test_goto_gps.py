@@ -187,7 +187,7 @@ def main():
     parser.add_argument("--lat", type=float, required=True, help="Target latitude (deg)")
     parser.add_argument("--lon", type=float, required=True, help="Target longitude (deg)")
     parser.add_argument("--alt", type=float, default=10.0, help="Target altitude AGL (m)")
-    parser.add_argument("--sitl", action="store_true", help="Use SITL (udp://127.0.0.1:14540)")
+    parser.add_argument("--sitl", action="store_true", help="Use SITL (udp://:14540@localhost:14580)")
     parser.add_argument("--hardware", action="store_true", help="Use /dev/ttyUSB0")
     parser.add_argument("--port", type=str, default=None, help="Custom serial port")
     parser.add_argument("--api", action="store_true", help="Arm via API instead of waiting for manual RC arm")
@@ -203,7 +203,7 @@ def main():
     rclpy.init()
     try:
         if sitl:
-            fcu_url = "udp://127.0.0.1:14540"
+            fcu_url = "udp://:14540@localhost:14580"
             print("[MAIN] Using SITL (UDP)")
         else:
             fcu_url = f"serial:///{port}:921600" if port else "serial:///dev/ttyTHS1:921600"
