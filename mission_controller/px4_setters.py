@@ -18,7 +18,7 @@ import rclpy
 import threading
 import math
 from geometry_msgs.msg import PoseStamped, TwistStamped
-from mavros_msgs.srv import CommandBool, SetMode, CommandTOL, ParamSet
+from mavros_msgs.srv import CommandBool, SetMode, CommandTOL, ParamGet, ParamSet
 from mavros_msgs.msg import ParamValue
 
 
@@ -75,6 +75,59 @@ class PX4Setters:
 
         print(f"[PX4] Altitude limit: {feet} ft ({meters:.2f} m)")
         return True
+
+    def get_param(self, name, timeout=5, quiet=False):
+        """Read a PX4/MAVROS parameter by name. Returns ParamValue or None."""
+        if not self.connected:
+            if not quiet:
+                print(f"[PX4] Not connected, cannot get {name}")
+            return None
+
+        if not self.param_get_client.wait_for_service(timeout_sec=5):
+            if not quiet:
+                print("[PX4] /param/get service unavailable")
+            return None
+
+        req = ParamGet.Request()
+        req.param_id = str(name)
+
+        try:
+            future = self.param_get_client.call_async(req)
+            start = time.time()
+            while not future.done() and (time.time() - start) < timeout:
+                rclpy.spin_once(self, timeout_sec=0.1)
+
+            if future.done() and future.result() and future.result().success:
+                return future.result().value
+
+            if not quiet:
+                print(f"[PX4] Failed to get {name}")
+            return None
+        except Exception as e:
+            if not quiet:
+                print(f"[PX4] Failed to get {name}: {str(e)}")
+            return None
+
+    def wait_for_params(self, names, timeout=30, poll_interval=1.0):
+        """Block until MAVROS can read all requested PX4 parameters."""
+        pending = {str(name) for name in names}
+        start = time.time()
+
+        print(f"[PX4] Waiting for MAVROS param sync: {', '.join(sorted(pending))}")
+        while pending and (time.time() - start) < timeout:
+            for name in list(pending):
+                if self.get_param(name, timeout=2, quiet=True) is not None:
+                    pending.remove(name)
+
+            if not pending:
+                print("[PX4] ✓ MAVROS params available")
+                return True
+
+            rclpy.spin_once(self, timeout_sec=0.1)
+            time.sleep(poll_interval)
+
+        print(f"[PX4] Timed out waiting for params: {', '.join(sorted(pending))}")
+        return False
 
     def set_param(self, name, value, timeout=10, integer=False):
         """Set a PX4/MAVROS parameter by name."""

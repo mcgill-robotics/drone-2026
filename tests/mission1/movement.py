@@ -89,6 +89,11 @@ def current_gps_coordinate(timeout: float = 10.0) -> dict[str, float] | None:
 
 def configure_motion_limits(px4: Any) -> bool:
     print("[MISSION1 MOVE] Setting conservative PX4 motion limits")
+    param_names = [name for name, _value in MOTION_LIMIT_PARAMS]
+    if not px4.wait_for_params(param_names, timeout=30):
+        print("[MISSION1 MOVE] MAVROS params not ready")
+        return False
+
     for name, value in MOTION_LIMIT_PARAMS:
         if not px4.set_param(name, value):
             print(f"[MISSION1 MOVE] Failed to set {name}")
