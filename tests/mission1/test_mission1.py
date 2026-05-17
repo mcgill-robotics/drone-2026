@@ -206,7 +206,7 @@ def main():
         origin_coord = movement.current_gps_coordinate()
         if origin_coord is None:
             print("[MISSION1] Could not read current GPS coordinate for mission origin")
-            return False
+        
         print(
             "[MISSION1] Runtime origin: "
             f"lat={origin_coord['lat']:.7f}, lon={origin_coord['lon']:.7f}"
@@ -219,7 +219,7 @@ def main():
     if phase2_start is None:
         print("[MISSION1] Lap file must define after_lap for phase 2 start")
         return False
-
+        
     resume_boustrophedon = False
     if boustro_state_file.exists() and not args.regenerate_boustrophedon:
         state = load_json(boustro_state_file)

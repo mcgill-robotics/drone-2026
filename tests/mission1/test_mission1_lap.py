@@ -130,6 +130,8 @@ def load_lap_path(mission: dict[str, Any]) -> list[Coordinate]:
     loop_nodes = pathfinder.tsp_loop_path()
     if not loop_nodes:
         raise ValueError("Pathfinding returned an empty lap path")
+    for i, node in enumerate(loop_nodes, start=1):
+        print(f"[MISSION1 LAP] Computed lap node {i}: x={node.x:.7f}, y={node.y:.7f}")
     return [node_to_coordinate(node) for node in loop_nodes]
 
 

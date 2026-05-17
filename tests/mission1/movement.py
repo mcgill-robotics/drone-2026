@@ -15,7 +15,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 EARTH_RADIUS_M = 6_378_137.0
-ARRIVAL_TOLERANCE_M = 2.0
+ARRIVAL_TOLERANCE_M = 0.5
 ALTITUDE_TOLERANCE_M = 0.75
 SETPOINT_RATE_HZ = 10
 MOTION_LIMIT_PARAMS = (
@@ -96,15 +96,17 @@ def current_gps_coordinate(timeout: float = 10.0) -> dict[str, float] | None:
 def configure_motion_limits(px4: Any) -> bool:
     print("[MISSION1 MOVE] Setting conservative PX4 motion limits")
     param_names = [name for name, _value in MOTION_LIMIT_PARAMS]
+    """
     if not px4.wait_for_params(param_names, timeout=30):
         print("[MISSION1 MOVE] MAVROS params not ready")
         return False
-
+    """
     for name, value in MOTION_LIMIT_PARAMS:
         if not px4.set_param(name, value):
             print(f"[MISSION1 MOVE] Failed to set {name}")
             continue
     return True
+
 
 
 def begin_phase(*, takeoff_altitude: float = 5.0, arm_timeout: float = 60.0) -> bool:
@@ -201,6 +203,7 @@ def navigate_to_coordinate(
 
         now = time.time()
         if now - last_log >= 1.0:
+            print(f"gps coordinate: lat={current_gps['latitude']:.7f}, lon={current_gps['longitude']:.7f}")
             print(f"[MISSION1 MOVE] Distance XY: {horizontal_distance:.2f}m, alt error: {altitude_error:.2f}m")
             last_log = now
 
