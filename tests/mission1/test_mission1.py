@@ -3,8 +3,11 @@
 
 import argparse
 import json
+import os
+import signal
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 
@@ -14,6 +17,8 @@ DEFAULT_BOUSTRO_AREA_FILE = SCRIPT_DIR / "boustrophedon" / "area.json"
 DEFAULT_BOUSTRO_STATE_FILE = SCRIPT_DIR / "boustrophedon" / "coverage_state.json"
 DEFAULT_BOUSTRO_SETTINGS_FILE = SCRIPT_DIR / "boustrophedon" / "settings.yaml"
 KEEP_PX4_RUNNING = False
+CURRENT_PHASE = None
+SHUTTING_DOWN = False
 
 
 def load_json(path):
@@ -29,10 +34,78 @@ def save_json(path, data):
     tmp_path.replace(path)
 
 
+def terminate_process(proc, label, timeout=10.0):
+    if proc.poll() is not None:
+        return
+
+    print(f"[MISSION1] Stopping {label}...", flush=True)
+    try:
+        os.killpg(proc.pid, signal.SIGINT)
+    except ProcessLookupError:
+        return
+    except Exception:
+        proc.terminate()
+
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if proc.poll() is not None:
+            return
+        time.sleep(0.1)
+
+    print(f"[MISSION1] {label} did not stop after SIGINT; sending SIGTERM", flush=True)
+    try:
+        os.killpg(proc.pid, signal.SIGTERM)
+    except ProcessLookupError:
+        return
+    except Exception:
+        proc.terminate()
+
+    deadline = time.time() + 3.0
+    while time.time() < deadline:
+        if proc.poll() is not None:
+            return
+        time.sleep(0.1)
+
+    print(f"[MISSION1] {label} did not stop after SIGTERM; sending SIGKILL", flush=True)
+    try:
+        os.killpg(proc.pid, signal.SIGKILL)
+    except ProcessLookupError:
+        return
+    except Exception:
+        proc.kill()
+
+
+def shutdown_current_phase():
+    global CURRENT_PHASE
+    if CURRENT_PHASE is not None and CURRENT_PHASE.poll() is None:
+        terminate_process(CURRENT_PHASE, "active mission phase")
+    CURRENT_PHASE = None
+
+
+def handle_shutdown(signum, _frame):
+    global SHUTTING_DOWN
+    if SHUTTING_DOWN:
+        raise KeyboardInterrupt
+    SHUTTING_DOWN = True
+    print(f"\n[MISSION1] Received signal {signum}; shutting down mission orchestration", flush=True)
+    shutdown_current_phase()
+    raise KeyboardInterrupt
+
+
 def run_phase(script_name, args):
+    global CURRENT_PHASE
     cmd = [sys.executable, str(SCRIPT_DIR / script_name), *args]
     print(f"[MISSION1] Running: {' '.join(cmd)}", flush=True)
-    return subprocess.run(cmd, check=False).returncode
+    proc = subprocess.Popen(cmd, start_new_session=True)
+    CURRENT_PHASE = proc
+    try:
+        return proc.wait()
+    except KeyboardInterrupt:
+        terminate_process(proc, script_name)
+        return 130
+    finally:
+        if CURRENT_PHASE is proc:
+            CURRENT_PHASE = None
 
 
 def import_movement():
@@ -219,9 +292,15 @@ def main():
 
 
 if __name__ == "__main__":
+    signal.signal(signal.SIGINT, handle_shutdown)
+    signal.signal(signal.SIGTERM, handle_shutdown)
     try:
         success = main()
+    except KeyboardInterrupt:
+        print("[MISSION1] Interrupted; cleanup requested", flush=True)
+        success = False
     finally:
+        shutdown_current_phase()
         if not KEEP_PX4_RUNNING:
             try:
                 import movement
