@@ -42,7 +42,7 @@ def boot_px4(fcu_url="serial:///dev/ttyTHS1:921600", namespace="mavros"):
 
     Args:
         fcu_url: Flight Control Unit URL
-                - For SITL: "udp://127.0.0.1:14540"
+                - For SITL: "udp://:14540@localhost:14580"
                 - For hardware: "serial:///dev/ttyUSB0:921600" or similar
         namespace: MAVROS namespace (default "mavros")
 

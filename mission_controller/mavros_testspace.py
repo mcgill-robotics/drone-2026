@@ -302,7 +302,7 @@ def main():
     # Boot PX4 with SITL (simulation)
     # For hardware, use: boot_px4("serial:///dev/ttyUSB0:921600")
     print("[MAIN] Booting PX4...")
-    px4_proc = boot_px4()  # Uses default SITL URL: udp://127.0.0.1:14540
+    px4_proc = boot_px4()  # Uses default SITL URL: udp://:14540@localhost:14580
     
     
     # Initialize and connect to MAVROS

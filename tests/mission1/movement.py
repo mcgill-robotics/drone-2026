@@ -25,9 +25,10 @@ _launch_alt = None
 _hover_alt = None
 
 
+
 def fcu_url(*, sitl: bool = False, port: str | None = None) -> str:
     if sitl:
-        return "udp://127.0.0.1:14540"
+        return "udp://:14540@localhost:14580"
     return f"serial:///{port}:921600" if port else "serial:///dev/ttyTHS1:921600"
 
 
