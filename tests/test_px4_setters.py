@@ -23,6 +23,7 @@ class FakePX4(PX4Setters):
         self.current_position.pose.position.y = 0.0
         self.current_position.pose.position.z = 0.0
         self.param_get_client = MagicMock()
+        self.param_pull_client = MagicMock()
         self.arming_client = MagicMock()
         self.set_mode_client = MagicMock()
         self.takeoff_client = MagicMock()

@@ -18,7 +18,7 @@ import rclpy
 import threading
 import math
 from geometry_msgs.msg import PoseStamped, TwistStamped
-from mavros_msgs.srv import CommandBool, SetMode, CommandTOL, ParamGet, ParamSet
+from mavros_msgs.srv import CommandBool, SetMode, CommandTOL, ParamGet, ParamPull, ParamSet
 from mavros_msgs.msg import ParamValue
 
 
@@ -108,10 +108,48 @@ class PX4Setters:
                 print(f"[PX4] Failed to get {name}: {str(e)}")
             return None
 
+    def pull_params(self, timeout=30, force=True):
+        """Ask MAVROS to pull/sync the full PX4 parameter table."""
+        if not self.connected:
+            print("[PX4] Not connected, cannot pull params")
+            return False
+
+        if not self.param_pull_client.wait_for_service(timeout_sec=5):
+            print("[PX4] /param/pull service unavailable")
+            return False
+
+        req = ParamPull.Request()
+        req.force_pull = bool(force)
+
+        try:
+            print("[PX4] Pulling MAVROS parameter cache...")
+            future = self.param_pull_client.call_async(req)
+            start = time.time()
+            while not future.done() and (time.time() - start) < timeout:
+                rclpy.spin_once(self, timeout_sec=0.1)
+
+            if not future.done():
+                print(f"[PX4] Param pull timed out after {timeout}s")
+                return False
+
+            result = future.result()
+            if result and result.success:
+                received = getattr(result, "param_received", "unknown")
+                print(f"[PX4] ✓ MAVROS param pull complete ({received} params)")
+                return True
+
+            print("[PX4] MAVROS param pull failed")
+            return False
+        except Exception as e:
+            print(f"[PX4] Param pull failed: {str(e)}")
+            return False
+
     def wait_for_params(self, names, timeout=30, poll_interval=1.0):
         """Block until MAVROS can read all requested PX4 parameters."""
         pending = {str(name) for name in names}
         start = time.time()
+
+        self.pull_params(timeout=min(30, timeout), force=True)
 
         print(f"[PX4] Waiting for MAVROS param sync: {', '.join(sorted(pending))}")
         while pending and (time.time() - start) < timeout:

@@ -41,7 +41,7 @@ from mavros_msgs.msg import (
     GPSRTK,
     RTKBaseline,
 )
-from mavros_msgs.srv import CommandBool, SetMode, CommandTOL, CommandHome, ParamGet, ParamSet
+from mavros_msgs.srv import CommandBool, SetMode, CommandTOL, CommandHome, ParamGet, ParamPull, ParamSet
 from sensor_msgs.msg import BatteryState, NavSatFix, Imu
 #from types import Point
 
@@ -302,6 +302,7 @@ class PX4Getters(Node):
         # =========================================================
 
         self.param_get_client = self.create_client(ParamGet, f"/{namespace}/param/get")
+        self.param_pull_client = self.create_client(ParamPull, f"/{namespace}/param/pull")
         self.param_set_client = self.create_client(ParamSet, f"/{namespace}/param/set")
         self.arming_client = self.create_client(CommandBool, f"/{namespace}/cmd/arming")
         self.set_mode_client = self.create_client(SetMode, f"/{namespace}/set_mode")
