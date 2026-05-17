@@ -153,13 +153,29 @@ def main():
     try:
         # Initialize PX4 interface (connect to existing MAVROS)
         print("[MAIN] Initializing PX4Interface...")
-        px4 = init_px4()
-
+        
+        # Retry connecting to MAVROS with timeout
+        max_retries = 5
+        for attempt in range(max_retries):
+            print(f"[MAIN] Connection attempt {attempt + 1}/{max_retries}...")
+            px4 = init_px4()
+            
+            if px4.connected:
+                print("[MAIN] ✓ Connected to MAVROS")
+                break
+            else:
+                print(f"[MAIN] Failed to connect (attempt {attempt + 1}/{max_retries})")
+                if attempt < max_retries - 1:
+                    print("[MAIN] Waiting 3 seconds before retry...")
+                    time.sleep(3)
+        
         if not px4.connected:
-            print("[MAIN] Failed to connect to MAVROS")
+            print("[MAIN] Failed to connect to MAVROS after multiple attempts")
+            print("[MAIN] Make sure:")
+            print("[MAIN]   1. MAVROS is running on the Jetson")
+            print("[MAIN]   2. You ran: source /opt/ros/humble/setup.bash")
+            print("[MAIN]   3. PX4 SITL is running in Gazebo")
             return False
-
-        print("[MAIN] ✓ Connected to MAVROS")
 
         # Run hover test
         tester = HoverTest(px4, verbose=True)
