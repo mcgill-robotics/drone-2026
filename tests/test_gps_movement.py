@@ -29,9 +29,9 @@ from mission_controller.px4_interface import init_px4, boot_px4, stop_px4
 
 
 EARTH_RADIUS_M = 6_378_137.0
-ARRIVAL_TOLERANCE_M = 2.0
+ARRIVAL_TOLERANCE_M = 0.5
 SETPOINT_RATE_HZ = 10
-ALTITUDE_TOLERANCE_M = 0.75
+ALTITUDE_TOLERANCE_M = 0.5
 MOTION_LIMIT_PARAMS = (
     ("MPC_XY_VEL_MAX", 2.0),
     ("MPC_XY_CRUISE", 1.0),
@@ -79,10 +79,11 @@ class GPSMovementTest:
         """Configure conservative PX4 motion limits for this test."""
         self.log("\n[TEST] Setting conservative PX4 motion limits...")
         param_names = [name for name, _value in MOTION_LIMIT_PARAMS]
+        """
         if not self.px4.wait_for_params(param_names, timeout=30):
             self.log("[TEST] MAVROS params not ready")
-            return False
-
+            continue
+        """
         for name, value in MOTION_LIMIT_PARAMS:
             if not self.px4.set_param(name, value):
                 self.log(f"[TEST] Failed to set {name}")

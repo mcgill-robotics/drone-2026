@@ -9,6 +9,7 @@ This is the main public entry point used by the rest of the system.
 """
 
 import time
+import os
 import rclpy
 import subprocess
 
@@ -36,7 +37,7 @@ _autopilot = None
 _px4_process = None
 
 
-def boot_px4(fcu_url="serial:///dev/ttyTHS1:921600", namespace="mavros"):
+def boot_px4(fcu_url="serial:///dev/ttyTHS1:921600", namespace="mavros", suppress_output=True):
     """
     Boot PX4 via ros2 launch
 
@@ -59,14 +60,20 @@ def boot_px4(fcu_url="serial:///dev/ttyTHS1:921600", namespace="mavros"):
     print(f"[PX4] Booting PX4 with FCU URL: {fcu_url}")
 
     try:
+        # Honor environment override for convenience in test runs
+        if os.getenv("PX4_SUPPRESS_MAVROS_OUTPUT", "").lower() in {"1", "true", "yes"}:
+            suppress_output = True
         # Build the ros2 launch command
         cmd = [
             "ros2", "launch", "mavros", "px4.launch",
             f"fcu_url:={fcu_url}"
         ]
 
-        # Start the process
-        _px4_process = subprocess.Popen(cmd)
+        # Start the process. Optionally suppress stdout/stderr to hide MAVROS
+        # launch logs in the test terminal.
+        stdout = subprocess.DEVNULL if suppress_output else None
+        stderr = subprocess.DEVNULL if suppress_output else None
+        _px4_process = subprocess.Popen(cmd, stdout=stdout, stderr=stderr)
 
         print(f"[PX4] PX4 booting process started (PID: {_px4_process.pid})")
         print("[PX4] Waiting for PX4 to initialize...")
