@@ -47,8 +47,16 @@ CONTROL_RATE_HZ = 10
 
 MAX_XY_SPEED_MPS = 1.0
 MIN_XY_SPEED_MPS = 0.15
-MAX_Z_SPEED_MPS = 0.4
+MAX_Z_SPEED_MPS = 0.25  # safer vertical speed limit for hardware tests
 SLOWDOWN_RADIUS_M = 6.0
+
+# MAVROS /mavros/setpoint_velocity/cmd_vel is normally ENU: +Z = up.
+# If your bench test proves your setup behaves opposite, run with --invert-vz.
+INVERT_VZ_DEFAULT = False
+
+# Safety guard: if altitude error is huge, stop instead of commanding vertical motion.
+MAX_ALLOWED_ALT_ERROR_M = 3.0
+
 
 
 def clamp(value, low, high):
@@ -71,10 +79,11 @@ def gps_to_local_offset(origin_lat, origin_lon, target_lat, target_lon):
 
 
 class LapTest:
-    def __init__(self, px4, waypoints, takeoff_altitude_m=TAKEOFF_ALTITUDE_M):
+    def __init__(self, px4, waypoints, takeoff_altitude_m=TAKEOFF_ALTITUDE_M, invert_vz=INVERT_VZ_DEFAULT):
         self.px4 = px4
         self.waypoints = waypoints
         self.takeoff_altitude_m = float(takeoff_altitude_m)
+        self.invert_vz = bool(invert_vz)
         self.mission_altitude_m = None
 
     def log(self, msg):
@@ -154,9 +163,20 @@ class LapTest:
                 vy = 0.0
 
             # Hold altitude gently.
-            vz = clamp(0.5 * dz, -MAX_Z_SPEED_MPS, MAX_Z_SPEED_MPS)
+            # Assumption for MAVROS cmd_vel: local velocity is ENU, so +vz means UP.
+            # If your setup/logs show +vz makes the drone descend, run with --invert-vz.
+            if abs(dz) > MAX_ALLOWED_ALT_ERROR_M:
+                self.px4.send_velocity_setpoint(0.0, 0.0, 0.0, 0.0)
+                self.log(
+                    f"[TEST][SAFETY] Altitude error too large: dz={dz:.2f}m. "
+                    "Stopping instead of sending vertical velocity."
+                )
+                return False
 
-            self.px4.send_velocity_setpoint(vx, vy, vz, 0.0)
+            vz_enu = clamp(0.35 * dz, -MAX_Z_SPEED_MPS, MAX_Z_SPEED_MPS)
+            vz_cmd = -vz_enu if self.invert_vz else vz_enu
+
+            self.px4.send_velocity_setpoint(vx, vy, vz_cmd, 0.0)
             rclpy.spin_once(self.px4, timeout_sec=0.02)
 
             now = time.time()
@@ -164,7 +184,7 @@ class LapTest:
                 self.log(
                     f"[TEST] WP{waypoint_index}: xy={xy_dist:.2f}m, "
                     f"alt_err={alt_error:.2f}m, "
-                    f"vx={vx:.2f}, vy={vy:.2f}, vz={vz:.2f}"
+                    f"vx={vx:.2f}, vy={vy:.2f}, vz_cmd={vz_cmd:.2f}, dz={dz:.2f}"
                 )
                 last_log = now
 
@@ -274,6 +294,7 @@ def main():
     parser.add_argument("--hardware", action="store_true", help="Use hardware on /dev/ttyUSB0")
     parser.add_argument("--port", type=str, default=None, help="Custom serial port")
     parser.add_argument("--alt", type=float, default=TAKEOFF_ALTITUDE_M, help="Takeoff altitude in meters")
+    parser.add_argument("--invert-vz", action="store_true", help="Invert vertical velocity command if bench test shows +vz descends")
     args = parser.parse_args()
 
     sitl = args.sitl
@@ -308,6 +329,7 @@ def main():
             px4=px4,
             waypoints=LAP_WAYPOINTS,
             takeoff_altitude_m=args.alt,
+            invert_vz=args.invert_vz,
         )
 
         return tester.run()
