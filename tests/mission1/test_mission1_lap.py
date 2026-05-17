@@ -109,6 +109,10 @@ def node_to_coordinate(node: Any) -> Coordinate:
     return Coordinate(lat=float(node.x), lon=float(node.y))
 
 
+def same_coordinate(a: Coordinate, b: Coordinate, tolerance: float = 1e-12) -> bool:
+    return abs(a.lat - b.lat) <= tolerance and abs(a.lon - b.lon) <= tolerance
+
+
 def load_lap_path(mission: dict[str, Any]) -> list[Coordinate]:
     lap = mission.get("lap", mission)
     if not isinstance(lap, dict):
@@ -210,16 +214,34 @@ def run_laps(
         effective_max_laps = 1
         print("[MISSION1 LAP] Dry-run defaulting to one lap. Use --max-laps to change this.")
 
+    entry_coord = None
+    lap_segment = lap_path
+    if len(lap_path) > 1 and same_coordinate(lap_path[0], lap_path[-1]):
+        entry_coord = lap_path[0]
+        lap_segment = lap_path[1:]
+
+    if entry_coord is not None:
+        print("[MISSION1 LAP] Flying to lap entry waypoint")
+        ok = navigate(
+            navigator,
+            entry_coord,
+            dry_run=dry_run,
+            label="Lap entry waypoint",
+        )
+        summary.coordinates_attempted += 1
+        if not ok:
+            raise RuntimeError("Navigation failed at lap entry waypoint")
+
     while effective_max_laps is None or summary.laps_completed < effective_max_laps:
         lap_number = summary.laps_completed + 1
         print(f"[MISSION1 LAP] Starting lap {lap_number}")
 
-        for i, coord in enumerate(lap_path, start=1):
+        for i, coord in enumerate(lap_segment, start=1):
             ok = navigate(
                 navigator,
                 coord,
                 dry_run=dry_run,
-                label=f"Lap {lap_number} waypoint {i}/{len(lap_path)}",
+                label=f"Lap {lap_number} waypoint {i}/{len(lap_segment)}",
             )
             summary.coordinates_attempted += 1
             if not ok:

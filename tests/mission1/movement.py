@@ -103,7 +103,7 @@ def configure_motion_limits(px4: Any) -> bool:
     for name, value in MOTION_LIMIT_PARAMS:
         if not px4.set_param(name, value):
             print(f"[MISSION1 MOVE] Failed to set {name}")
-            return False
+            continue
     return True
 
 

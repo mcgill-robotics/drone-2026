@@ -212,6 +212,7 @@ def main():
             f"lat={origin_coord['lat']:.7f}, lon={origin_coord['lon']:.7f}"
         )
         populate_runtime_origin(lap_file, boustro_area_file, origin_coord)
+        movement.cleanup()
 
     return_coord = resolve_coord(lap_file, "return", "start")
     phase2_start = resolve_coord(lap_file, "after_lap", "transition")
