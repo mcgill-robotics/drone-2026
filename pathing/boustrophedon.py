@@ -300,6 +300,12 @@ def _plan_coverage_grid(
 
         prev_end = wps[-1]
 
+    if goal is not None and prev_end is not None and prev_end != goal:
+        connector = _astar(occ, prev_end, goal)
+        if connector is None:
+            raise ValueError("Last sweep point cannot reach goal.")
+        full_path.extend(connector[1:] if full_path and connector[0] == full_path[-1] else connector)
+
     return cells, order, full_path
 
 
