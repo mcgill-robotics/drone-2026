@@ -125,6 +125,31 @@ def _astar(grid: np.ndarray, start: tuple[int, int], goal: tuple[int, int]):
     return None
 
 
+def _compress_collinear_path(path: list[tuple[int, int]]) -> list[tuple[int, int]]:
+    deduped = []
+    for point in path:
+        if not deduped or point != deduped[-1]:
+            deduped.append(point)
+    path = deduped
+
+    if len(path) <= 2:
+        return path
+
+    compressed = [path[0]]
+    prev_dr = path[1][0] - path[0][0]
+    prev_dc = path[1][1] - path[0][1]
+
+    for i in range(2, len(path)):
+        dr = path[i][0] - path[i - 1][0]
+        dc = path[i][1] - path[i - 1][1]
+        if (dr, dc) != (prev_dr, prev_dc):
+            compressed.append(path[i - 1])
+            prev_dr, prev_dc = dr, dc
+
+    compressed.append(path[-1])
+    return compressed
+
+
 def _vertical_boustrophedon_cells(occ: np.ndarray):
     rows, cols = occ.shape
     free_intervals = []
@@ -306,7 +331,7 @@ def _plan_coverage_grid(
             raise ValueError("Last sweep point cannot reach goal.")
         full_path.extend(connector[1:] if full_path and connector[0] == full_path[-1] else connector)
 
-    return cells, order, full_path
+    return cells, order, _compress_collinear_path(full_path)
 
 
 def plan_boustrophedon(
