@@ -176,7 +176,7 @@ Examples:
 
     # Determine FCU URL
     if args.sitl:
-        fcu_url = "udp://127.0.0.1:14540"
+        fcu_url = "udp://:14540@localhost:14580"
         print("[MAIN] Using SITL simulation")
     elif args.port:
         fcu_url = f"serial://{args.port}:921600"
