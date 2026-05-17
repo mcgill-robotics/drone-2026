@@ -287,7 +287,7 @@ def main():
 
     try:
         if sitl:
-            fcu_url = "udp://:14540@localhost:14580
+            fcu_url = "udp://:14540@localhost:14580"
             print("[MAIN] Using SITL")
         else:
             fcu_url = f"serial:///{port}:921600" if port else "serial:///dev/ttyTHS1:921600"
