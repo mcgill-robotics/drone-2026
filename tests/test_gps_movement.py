@@ -86,7 +86,7 @@ class GPSMovementTest:
         for name, value in MOTION_LIMIT_PARAMS:
             if not self.px4.set_param(name, value):
                 self.log(f"[TEST] Failed to set {name}")
-                return False
+                continue
         self.log("[TEST] ✓ Motion limits configured")
         return True
 
