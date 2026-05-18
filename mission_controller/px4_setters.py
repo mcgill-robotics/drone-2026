@@ -430,6 +430,9 @@ class PX4Setters:
             msg.pose.position.y = float(y)
             msg.pose.position.z = self._clamp_alt(float(z))
             
+            # Record that user just published (heartbeat will skip if recent)
+            self._last_user_publish_time = time.time()
+            
             # Set orientation (default: no rotation - level flight)
             current_yaw = yaw if yaw is not None else 0.0
             
@@ -440,6 +443,9 @@ class PX4Setters:
                     dx = x - current_pos["x"]
                     dy = y - current_pos["y"]
                     current_yaw = math.atan2(dy, dx)
+                    # DEBUG: Print calculated yaw
+                    yaw_deg = math.degrees(current_yaw)
+                    print(f"[PX4] Yaw: {yaw_deg:.1f}° (from position {current_pos['x']:.1f},{current_pos['y']:.1f} to {x:.1f},{y:.1f})")
             
             # Convert yaw (heading angle) to quaternion (roll=0, pitch=0)
             # Formula: q = [sin(yaw/2)*z_axis_component, cos(yaw/2)]
@@ -725,14 +731,17 @@ class PX4Setters:
         Worker thread function that publishes a lightweight heartbeat message.
 
         This runs in the background and keeps OFFBOARD mode alive by publishing
-        zero velocity setpoints. However, it SKIPS publishing if the user has
-        published a command recently (within the last heartbeat interval).
+        zero position/velocity setpoints. However, it SKIPS publishing if the user 
+        has published a command recently (within the last heartbeat interval).
 
         This prevents the heartbeat from overwriting user commands.
         
         The heartbeat publishes at a low frequency (default 10Hz) to keep PX4
         aware the system is alive, while allowing user commands to take effect
         without interference.
+        
+        CRITICAL: Only publishes when user hasn't published - this prevents
+        conflicting position vs velocity setpoints in OFFBOARD mode.
         """
         dt = 1.0 / rate_hz
         publish_count = 0
@@ -746,6 +755,7 @@ class PX4Setters:
                 # Only publish heartbeat if user hasn't published recently
                 # This prevents heartbeat from overwriting user commands
                 if time_since_user_publish > dt:
+                    # Publish zero velocity to maintain OFFBOARD mode
                     msg = TwistStamped()
                     msg.header.stamp = self.get_clock().now().to_msg()
                     msg.twist.linear.x = 0.0
