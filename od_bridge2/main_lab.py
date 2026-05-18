@@ -10,19 +10,18 @@ import numpy as np
 # the tool must still work, so these are kept current with what actually works
 # rather than left at loose initial guesses.
 DEFAULTS = {
-    # Detection colour mask: h1/h2 are the target hue bands (rose/magenta wraps
-    # around 0 and 180); s_lo/v_lo are floors that, when adapt_floors is on,
-    # serve only as fallbacks for the per-frame estimate.
-    "h1_lo": 0,   "h1_hi": 10,
-    "h2_lo": 160, "h2_hi": 180,
-    "s_lo":  40,  "s_hi": 245,
-    "v_lo": 120,  "v_hi": 255,
+    # Detection colour mask: LAB space. OpenCV uint8 LAB ranges are:
+    # L (0-255), a (0-255, 128 is neutral), b (0-255, 128 is neutral).
+    # Magenta/Rose target: prominent positive 'a' (red/magenta).
+    "tgt_L_lo": 80,  "tgt_L_hi": 255,
+    "tgt_a_lo": 145, "tgt_a_hi": 255,
+    "tgt_b_lo": 110, "tgt_b_hi": 170,
     "kernel": 9,
     "min_area": 3000,
     "circularity": 0.6,
     "aspect": 0.65,
     "solidity": 0.9,
-    # Per-frame adaptation: derive s_lo/v_lo from the frame's own histogram so
+    # Per-frame adaptation: derive L_lo from the frame's own histogram so
     # the mask tracks ambient brightness instead of relying on fixed floors.
     "adapt_floors": 1,
     # Depth-gated size check (lighting-invariant). A real target must have an
@@ -34,24 +33,23 @@ DEFAULTS = {
     # pixels of last frame's centroid so the box does not flicker between
     # similar-looking objects.
     "track_radius": 120,
-    # Wet/dry classification. A dry target shows its vivid rose/magenta dye;
-    # a wet one has lost it and gone blue or pale grey. b_lo..b_hi is the blue
-    # hue band, used only to help DETECT wet targets in the colour mask.
-    # Classification is INDEPENDENT of the detection bands: it measures the
-    # fraction of target pixels carrying the dye -- hue in the dry_h1/dry_h2
-    # bands and saturated past dry_s_min -- and calls the target "dry" when
-    # that fraction is at least dry_hue_frac.
-    "b_lo": 90,
-    "b_hi": 140,
-    "dry_h1_lo": 0,   "dry_h1_hi": 10,
-    "dry_h2_lo": 160, "dry_h2_hi": 180,
-    "dry_s_min": 25,
+    # Wet target (blue/grey fallback): low 'b', relatively neutral 'a'.
+    # Used only to help DETECT wet targets in the colour mask.
+    "wet_L_lo": 80,  "wet_L_hi": 255,
+    "wet_a_lo": 110, "wet_a_hi": 150,
+    "wet_b_lo": 0,   "wet_b_hi": 115,
+    # Wet/dry classification. A dry target shows its vivid rose/magenta dye.
+    # We test if the pixels fall within these a/b bounds to count them as dry.
+    "dry_a_lo": 150, "dry_a_hi": 255,
+    "dry_b_lo": 110, "dry_b_hi": 170,
     "dry_hue_frac": 0.5,
 }
 
 
 def load_calibration():
-    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "calibration.json")
+    # Looks for a calibration_lab.json first, falls back to calibration.json if not found,
+    # but uses the LAB DEFAULTS.
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "calibration_lab.json")
     if not os.path.exists(path):
         return dict(DEFAULTS)
     with open(path) as f:
@@ -148,29 +146,24 @@ def _merge_candidates(primary, extra):
     return merged
 
 
-def classify_wetness(hsv, contour, calib):
+def classify_wetness(lab, contour, calib):
     """Label a detected target 'wet' or 'dry'.
 
     A dry target shows its vivid rose/magenta dye; a wet one has lost it and
     gone blue or pale grey. We measure the fraction of the target's pixels
-    that still carry the dye -- hue inside the dry_h1/dry_h2 bands and
-    saturated past dry_s_min so the hue is real and not grey-pixel noise. A
-    high fraction means dry; a low one means the dye has washed out -> wet.
-
-    The dry_* bands are deliberately separate from the h1/h2 detection bands
-    so that widening detection does not change what counts as "dry".
-
+    that still carry the dye in LAB space (checking the a/b bounds).
+    
     Returns (label, dry_fraction).
     """
-    region = np.zeros(hsv.shape[:2], np.uint8)
+    region = np.zeros(lab.shape[:2], np.uint8)
     cv2.drawContours(region, [contour], -1, 255, thickness=cv2.FILLED)
-    pix = hsv[region > 0]
+    pix = lab[region > 0]
     if len(pix) == 0:
         return "wet", 0.0
-    h, s = pix[:, 0].astype(int), pix[:, 1]
-    dry_hue = (((h >= calib["dry_h1_lo"]) & (h <= calib["dry_h1_hi"])) |
-               ((h >= calib["dry_h2_lo"]) & (h <= calib["dry_h2_hi"])))
-    dry = dry_hue & (s >= calib["dry_s_min"])
+    
+    a, b = pix[:, 1].astype(int), pix[:, 2].astype(int)
+    dry = ((a >= calib["dry_a_lo"]) & (a <= calib["dry_a_hi"]) &
+           (b >= calib["dry_b_lo"]) & (b <= calib["dry_b_hi"]))
     frac = float(np.count_nonzero(dry)) / len(pix)
     return ("dry" if frac >= calib["dry_hue_frac"] else "wet"), frac
 
@@ -195,7 +188,7 @@ def annotate_target(frame, stats):
 def detect(frame, calib, verbose=False, depth_frame=None, fx=None,
            prev_centroid=None, draw=True):
     blurred = cv2.GaussianBlur(frame, (5, 5), 0)
-    hsv = cv2.cvtColor(blurred, cv2.COLOR_BGR2HSV)
+    lab = cv2.cvtColor(blurred, cv2.COLOR_BGR2LAB)
 
     # Convert the RealSense depth frame to a metric float32 array once, so the
     # depth size gate can slice it instead of calling get_distance per pixel.
@@ -204,32 +197,24 @@ def detect(frame, calib, verbose=False, depth_frame=None, fx=None,
         depth_m = (np.asanyarray(depth_frame.get_data()).astype(np.float32)
                    * depth_frame.get_units())
 
-    # Saturation/value floors. With adapt_floors on, derive them from this
-    # frame's own histogram -- but only ever LOWER them: in a dim or washed-out
-    # frame the target dims too, so fixed floors would reject it. Never raise
-    # them above the calibrated values (that could let background in).
-    s_lo, v_lo = calib["s_lo"], calib["v_lo"]
+    # Lightness floors. With adapt_floors on, derive them from this
+    # frame's own histogram. Never raise them above the calibrated values.
+    L_lo = calib["tgt_L_lo"]
+    wet_L_lo = calib["wet_L_lo"]
     if calib.get("adapt_floors", 0):
-        s_lo = int(min(s_lo, np.percentile(hsv[:, :, 1], 40)))
-        v_lo = int(min(v_lo, np.percentile(hsv[:, :, 2], 30)))
+        ambient_L = np.percentile(lab[:, :, 0], 30)
+        L_lo = int(min(L_lo, ambient_L))
+        wet_L_lo = int(min(wet_L_lo, ambient_L))
 
-    m1 = cv2.inRange(hsv,
-                     np.array([calib["h1_lo"], s_lo, v_lo]),
-                     np.array([calib["h1_hi"], calib["s_hi"], calib["v_hi"]]))
-    if calib["h2_hi"] >= calib["h2_lo"]:
-        m2 = cv2.inRange(hsv,
-                         np.array([calib["h2_lo"], s_lo, v_lo]),
-                         np.array([calib["h2_hi"], calib["s_hi"], calib["v_hi"]]))
-        mask = cv2.bitwise_or(m1, m2)
-    else:
-        mask = m1
-
-    # Also catch wet (blue) targets so they can be detected and then labelled.
-    if calib["b_hi"] >= calib["b_lo"]:
-        mb = cv2.inRange(hsv,
-                         np.array([calib["b_lo"], s_lo, v_lo]),
-                         np.array([calib["b_hi"], calib["s_hi"], calib["v_hi"]]))
-        mask = cv2.bitwise_or(mask, mb)
+    m_tgt = cv2.inRange(lab,
+                        np.array([L_lo, calib["tgt_a_lo"], calib["tgt_b_lo"]]),
+                        np.array([calib["tgt_L_hi"], calib["tgt_a_hi"], calib["tgt_b_hi"]]))
+    
+    m_wet = cv2.inRange(lab,
+                        np.array([wet_L_lo, calib["wet_a_lo"], calib["wet_b_lo"]]),
+                        np.array([calib["wet_L_hi"], calib["wet_a_hi"], calib["wet_b_hi"]]))
+    
+    mask = cv2.bitwise_or(m_tgt, m_wet)
 
     k = max(1, int(calib["kernel"]) | 1)
     kernel = np.ones((k, k), np.uint8)
@@ -285,7 +270,7 @@ def detect(frame, calib, verbose=False, depth_frame=None, fx=None,
             cx, cy = int(M["m10"] / M["m00"]), int(M["m01"] / M["m00"])
             best_stats["centroid"] = (cx, cy)
         # Wet vs dry: does the target still show its rose/magenta dye?
-        wetness, dry_frac = classify_wetness(hsv, best, calib)
+        wetness, dry_frac = classify_wetness(lab, best, calib)
         best_stats["wetness"] = wetness
         best_stats["dry_fraction"] = dry_frac
         if draw:
@@ -335,7 +320,7 @@ def run_realsense(calib, verbose=False):
     # Let auto-exposure and auto-white-balance converge, then freeze BOTH.
     # A locked WB with auto-exposure still running lets brightness (and so the
     # apparent saturation) drift frame to frame -- that drift is what made the
-    # colour mask need constant re-tuning. Freezing both makes a frame's HSV
+    # colour mask need constant re-tuning. Freezing both makes a frame's LAB
     # reproducible without hard-coding scene-specific exposure values.
     color_sensor = profile.get_device().first_color_sensor()
     try:
@@ -426,8 +411,8 @@ def run_realsense(calib, verbose=False):
                 elif verbose:
                     print("target detected but no valid depth at centroid")
 
-            cv2.imshow('Live Dry Target Detection', annotated)
-            cv2.imshow('Mask', mask)
+            cv2.imshow('Live Dry Target Detection LAB', annotated)
+            cv2.imshow('Mask LAB', mask)
             if cv2.waitKey(1) & 0xFF == ord('q'):
                 break
     finally:
@@ -464,8 +449,8 @@ def main():
         if scale < 1.0:
             img = cv2.resize(img, (int(w * scale), int(h * scale)))
         annotated, mask, _ = detect(img, calib, verbose=True)
-        cv2.imshow('Dry Target Detection', annotated)
-        cv2.imshow('Mask', mask)
+        cv2.imshow('Dry Target Detection LAB', annotated)
+        cv2.imshow('Mask LAB', mask)
         cv2.waitKey(0)
         cv2.destroyAllWindows()
         return
@@ -477,12 +462,12 @@ def main():
               f"Also check no other app is using it and permissions are granted.")
         sys.exit(1)
     while True:
-        ret, frame = cap.read()
+        ret, cap_frame = cap.read()
         if not ret:
             break
-        annotated, mask, _ = detect(frame, calib, verbose=verbose)
-        cv2.imshow('Live Dry Target Detection', annotated)
-        cv2.imshow('Mask', mask)
+        annotated, mask, _ = detect(cap_frame, calib, verbose=verbose)
+        cv2.imshow('Live Dry Target Detection LAB', annotated)
+        cv2.imshow('Mask LAB', mask)
         if cv2.waitKey(1) & 0xFF == ord('q'):
             break
     cap.release()
