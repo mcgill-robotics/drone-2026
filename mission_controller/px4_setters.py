@@ -35,6 +35,7 @@ class PX4Setters:
         self._last_user_publish_time = 0  # Track when user last published a command
         self._last_command_message = None  # Track last published message (PoseStamped or TwistStamped)
         self._last_command_publisher = None  # Track which publisher to use for heartbeat
+        self._mission_yaw = None # Track the current yaw before taking off
 
         # Altitude limit (software-side clamp). None = no limit until set.
         self._max_alt_m = None
@@ -209,6 +210,11 @@ class PX4Setters:
             return self._max_alt_m
         return z
 
+    def lock_current_yaw(self):
+        self._mission_yaw = self.get_current_yaw()
+        print(f"[PX4] Mission yaw locked: {math.degrees(self._mission_yaw):.1f}°")
+        return self._mission_yaw
+
     def arm_vehicle(self, timeout=20):
         #Arm the vehicle (allow motors to spin)
         if not self.connected:
@@ -355,18 +361,13 @@ class PX4Setters:
             return False
         
         current = self.current_position.pose.position
-        current_orientation = self.current_position.pose.orientation
         target_alt = current.z + altitude
         
         # Extract yaw from current orientation quaternion
         # For a quaternion (x, y, z, w), yaw = atan2(2*(w*z + x*y), 1 - 2*(y*z + z*z))
         # Simplified for roll=0, pitch=0: yaw = atan2(2*w*z, 1 - 2*z*z)
-    
-        qx = current_orientation.x
-        qy = current_orientation.y
-        qz = current_orientation.z
-        qw = current_orientation.w
-        yaw = math.atan2(2.0 * (qw * qz + qx * qy), 1.0 - 2.0 * (qy * qy + qz * qz))
+   
+        yaw = self.lock_current_yaw()
         
         print(f"[PX4] Taking off to {target_alt:.2f}m (current: {current.z:.2f}m, climbing {altitude:.2f}m)...")
         print(f"[PX4] Locking yaw heading: {math.degrees(yaw):.1f}°")
@@ -525,29 +526,21 @@ class PX4Setters:
                 if math.hypot(dx, dy) > 0.3:
                     calculated_yaw = math.atan2(dy, dx)
                 else:
-                    calculated_yaw = self.get_current_yaw()
+                    calculated_yaw = self._mission_yaw if self._mission_yaw is not None else self.get_current_yaw()
             
             # Determine which yaw to use: calculated > explicit > none
             final_yaw = calculated_yaw if calculated_yaw is not None else yaw
+
+            if final_yaw is None:
+                final_yaw = self._mission_yaw if self._mission_yaw is not None else self.get_current_yaw()
             
             # Set orientation (yaw) if provided
-            if final_yaw is not None:
-                # Convert yaw to quaternion (roll=0, pitch=0, yaw=yaw)
-                # Using euler to quaternion conversion: q = [qx, qy, qz, qw]
-                yaw_f = float(final_yaw)
-                half_yaw = yaw_f / 2.0
-                msg.pose.orientation.x = 0.0
-                msg.pose.orientation.y = 0.0
-                msg.pose.orientation.z = math.sin(half_yaw)
-                msg.pose.orientation.w = math.cos(half_yaw)
-            else:
-                # Default orientation (no rotation)
-                final_yaw = self.get_current_yaw()
-                half_yaw = final_yaw / 2.0
-                msg.pose.orientation.x = 0.0
-                msg.pose.orientation.y = 0.0
-                msg.pose.orientation.z = math.sin(half_yaw)
-                msg.pose.orientation.w = math.cos(half_yaw)
+            yaw_f = float(final_yaw)
+            half_yaw = yaw_f / 2.0
+            msg.pose.orientation.x = 0.0
+            msg.pose.orientation.y = 0.0
+            msg.pose.orientation.z = math.sin(half_yaw)
+            msg.pose.orientation.w = math.cos(half_yaw)
             
             # Store message and publisher for heartbeat to republish
             self._last_command_message = msg
