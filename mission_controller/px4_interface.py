@@ -164,16 +164,7 @@ def get_px4():
 def validate_rtsp_url(rtsp_url, timeout=5):
     """
     Check if an RTSP stream is accessible and responding.
-    
     Uses ffprobe to check stream availability without displaying it.
-    
-    Args:
-        rtsp_url: RTSP URL to validate (e.g., rtsp://192.168.1.100:8554/live)
-        timeout: Timeout in seconds for the check
-    
-    Returns:
-        True if stream is accessible, False otherwise
-    
     Usage:
         if validate_rtsp_url("rtsp://192.168.1.100:8554/live"):
             print("Camera is online")
@@ -181,22 +172,8 @@ def validate_rtsp_url(rtsp_url, timeout=5):
             print("Camera is offline")
     """
     try:
-        cmd = [
-            "ffprobe",
-            "-v", "error",
-            "-select_streams", "v:0",
-            "-show_entries", "stream=codec_type",
-            "-of", "default=noprint_wrappers=1:nokey=1:noval=1",
-            rtsp_url
-        ]
-        
-        result = subprocess.run(
-            cmd,
-            timeout=timeout,
-            capture_output=True,
-            text=True
-        )
-        
+        cmd = ["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries", "stream=codec_type", "-of", "default=noprint_wrappers=1:nokey=1:noval=1", rtsp_url]
+        result = subprocess.run(cmd,timeout=timeout, capture_output=True, text=True)   
         return result.returncode == 0
         
     except (subprocess.TimeoutExpired, FileNotFoundError):
@@ -211,21 +188,8 @@ def start_rtsp_viewer_subprocess(rtsp_url, window_name="RTSP Camera Feed"):
     
     Launches test_mission1_camera_viewer.py as a separate process,
     allowing independent monitoring of the camera feed.
-    
-    Args:
-        rtsp_url: RTSP stream URL
-        window_name: Window title for the viewer
-    
-    Returns:
-        subprocess.Popen object if successful, None if failed
-    
     Usage:
-        # Start viewer in background
         viewer_proc = start_rtsp_viewer_subprocess("rtsp://192.168.1.100:8554/live")
-        
-        # Do mission stuff...
-        
-        # Stop viewer when done
         if viewer_proc:
             viewer_proc.terminate()
             viewer_proc.wait()
