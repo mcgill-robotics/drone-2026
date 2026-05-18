@@ -378,7 +378,7 @@ class PX4Setters:
                     return False
             
             # Send position setpoint with current yaw locked (heartbeat will maintain it)
-            if not self.send_position_setpoint(current.x, current.y, target_alt, yaw=yaw, yaw_from_direction=True):
+            if not self.send_position_setpoint(current.x, current.y, target_alt, yaw=yaw, yaw_from_direction=False):
                 print("[PX4] Failed to send takeoff position setpoint")
                 return False
             
@@ -421,7 +421,7 @@ class PX4Setters:
         try:
             req = CommandTOL.Request()
             req.min_pitch = 0.0
-            req.yaw = 0.0
+            req.yaw = self.get_current_yaw()
             req.latitude = 0.0
             req.longitude = 0.0
             req.altitude = 0.0
@@ -462,6 +462,16 @@ class PX4Setters:
         except Exception as e:
             print(f"[PX4] Landing failed: {str(e)}")
             return False
+
+    def get_current_yaw(self):
+        if not self.current_position:
+            return 0.0
+
+        q = self.current_position.pose.orientation
+        return math.atan2(
+            2.0 * (q.w * q.z + q.x * q.y),
+            1.0 - 2.0 * (q.y * q.y + q.z * q.z),
+        )
 
     # =========================================================
     # Publisher-based control APIs
@@ -512,7 +522,10 @@ class PX4Setters:
                 dx = x_clamped - current.x
                 dy = y_clamped - current.y
                 # Calculate yaw from direction (atan2 gives angle from +x axis)
-                calculated_yaw = math.atan2(dy, dx)
+                if math.hypot(dx, dy) > 0.3:
+                    calculated_yaw = math.atan2(dy, dx)
+                else:
+                    calculated_yaw = self.get_current_yaw()
             
             # Determine which yaw to use: calculated > explicit > none
             final_yaw = calculated_yaw if calculated_yaw is not None else yaw
@@ -529,10 +542,12 @@ class PX4Setters:
                 msg.pose.orientation.w = math.cos(half_yaw)
             else:
                 # Default orientation (no rotation)
+                final_yaw = self.get_current_yaw()
+                half_yaw = final_yaw / 2.0
                 msg.pose.orientation.x = 0.0
                 msg.pose.orientation.y = 0.0
-                msg.pose.orientation.z = 0.0
-                msg.pose.orientation.w = 1.0
+                msg.pose.orientation.z = math.sin(half_yaw)
+                msg.pose.orientation.w = math.cos(half_yaw)
             
             # Store message and publisher for heartbeat to republish
             self._last_command_message = msg

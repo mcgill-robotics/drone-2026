@@ -207,7 +207,7 @@ class GPSMovementTest:
                         target_x,
                         target_y,
                         target_alt,
-                        yaw_from_direction=True,
+                        yaw_from_direction=horizontal_distance > 0.3,
                     )
                     rclpy.spin_once(self.px4, timeout_sec=0.0)
 
