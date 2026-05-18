@@ -153,6 +153,7 @@ def navigate_to_coordinate(
     alt_agl: float | None = None,
     timeout: float = 60.0,
     interrupt_check: Callable[[], str | None] | None = None,
+    monitor_offboard: bool = False,
 ) -> bool | str:
     """Fly to a GPS lat/lon while holding current hover altitude by default."""
     px4 = connect()
@@ -196,10 +197,16 @@ def navigate_to_coordinate(
             time.sleep(dt)
             continue
 
+        rclpy.spin_once(px4, timeout_sec=0.0)
+        if monitor_offboard and px4.current_state is not None:
+            mode = px4.current_state.mode
+            if mode and mode != "OFFBOARD":
+                print(f"[MISSION1 MOVE] Vehicle left OFFBOARD mode ({mode}); pausing mission control")
+                return "manual"
+
         horizontal_distance = math.hypot(current_pos["x"] - target_x, current_pos["y"] - target_y)
         altitude_error = abs(current_pos["z"] - target_alt)
         px4.send_position_setpoint(target_x, target_y, target_alt, yaw_from_direction=True)
-        rclpy.spin_once(px4, timeout_sec=0.0)
 
         now = time.time()
         if now - last_log >= 1.0:

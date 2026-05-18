@@ -349,7 +349,22 @@ def run_boustrophedon(
                 waypoint["lat"],
                 waypoint["lon"],
                 interrupt_check=lambda: commands.latest_requested_action({"p", "q"}),
+                monitor_offboard=True,
             )
+            if result == "manual":
+                state["status"] = "paused"
+                if not dry_run:
+                    save_json(state_file, state)
+                print(
+                    "[MISSION1 BOUSTRO] OFFBOARD control was released. "
+                    "Saved last confirmed waypoint; resume will revisit it before continuing."
+                )
+                return {
+                    "status": "paused",
+                    "arrived": arrived_count,
+                    "current_index": state["current_index"],
+                    "total": len(path),
+                }
             if result == "paused":
                 resume_status = wait_until_resume_or_stop(commands, state_file, state, dry_run)
                 if resume_status == "stopped":
