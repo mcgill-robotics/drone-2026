@@ -155,3 +155,158 @@ def get_px4():
     """Get global PX4 interface"""
     global _autopilot
     return _autopilot
+
+
+# =========================================================
+# RTSP Camera Stream Utilities
+# =========================================================
+
+def validate_rtsp_url(rtsp_url, timeout=5):
+    """
+    Check if an RTSP stream is accessible and responding.
+    
+    Uses ffprobe to check stream availability without displaying it.
+    
+    Args:
+        rtsp_url: RTSP URL to validate (e.g., rtsp://192.168.1.100:8554/live)
+        timeout: Timeout in seconds for the check
+    
+    Returns:
+        True if stream is accessible, False otherwise
+    
+    Usage:
+        if validate_rtsp_url("rtsp://192.168.1.100:8554/live"):
+            print("Camera is online")
+        else:
+            print("Camera is offline")
+    """
+    try:
+        cmd = [
+            "ffprobe",
+            "-v", "error",
+            "-select_streams", "v:0",
+            "-show_entries", "stream=codec_type",
+            "-of", "default=noprint_wrappers=1:nokey=1:noval=1",
+            rtsp_url
+        ]
+        
+        result = subprocess.run(
+            cmd,
+            timeout=timeout,
+            capture_output=True,
+            text=True
+        )
+        
+        return result.returncode == 0
+        
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        return False
+    except Exception:
+        return False
+
+
+def start_rtsp_viewer_subprocess(rtsp_url, window_name="RTSP Camera Feed"):
+    """
+    Start the RTSP camera viewer in a background subprocess.
+    
+    Launches test_mission1_camera_viewer.py as a separate process,
+    allowing independent monitoring of the camera feed.
+    
+    Args:
+        rtsp_url: RTSP stream URL
+        window_name: Window title for the viewer
+    
+    Returns:
+        subprocess.Popen object if successful, None if failed
+    
+    Usage:
+        # Start viewer in background
+        viewer_proc = start_rtsp_viewer_subprocess("rtsp://192.168.1.100:8554/live")
+        
+        # Do mission stuff...
+        
+        # Stop viewer when done
+        if viewer_proc:
+            viewer_proc.terminate()
+            viewer_proc.wait()
+    """
+    try:
+        # Find the camera viewer script
+        script_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        viewer_script = os.path.join(
+            script_dir,
+            "tests",
+            "mission1",
+            "test_mission1_camera_viewer.py"
+        )
+        
+        if not os.path.exists(viewer_script):
+            print(f"[PX4] Camera viewer script not found: {viewer_script}")
+            return None
+        
+        cmd = [
+            "python3",
+            viewer_script,
+            "--rtsp-url", rtsp_url,
+            "--window-name", window_name,
+        ]
+        
+        print(f"[PX4] Starting RTSP viewer: {' '.join(cmd)}")
+        
+        proc = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        
+        # Give it a moment to start
+        time.sleep(1)
+        
+        if proc.poll() is None:
+            print(f"[PX4] ✓ RTSP viewer started (PID: {proc.pid})")
+            return proc
+        else:
+            stdout, stderr = proc.communicate()
+            print(f"[PX4] RTSP viewer failed to start:")
+            if stderr:
+                print(f"[PX4] {stderr.decode()}")
+            return None
+            
+    except Exception as e:
+        print(f"[PX4] Failed to start RTSP viewer: {str(e)}")
+        return None
+
+
+def stop_rtsp_viewer(viewer_proc, timeout=5):
+    """
+    Stop the RTSP camera viewer subprocess.
+    
+    Args:
+        viewer_proc: subprocess.Popen object from start_rtsp_viewer_subprocess()
+        timeout: Timeout in seconds to wait for graceful shutdown
+    
+    Returns:
+        True if stopped successfully, False if timeout or error
+    """
+    if viewer_proc is None:
+        return True
+    
+    if viewer_proc.poll() is not None:
+        print("[PX4] RTSP viewer already stopped")
+        return True
+    
+    try:
+        print("[PX4] Stopping RTSP viewer...")
+        viewer_proc.terminate()
+        viewer_proc.wait(timeout=timeout)
+        print("[PX4] ✓ RTSP viewer stopped")
+        return True
+        
+    except subprocess.TimeoutExpired:
+        print("[PX4] RTSP viewer did not stop gracefully, killing...")
+        viewer_proc.kill()
+        viewer_proc.wait()
+        return False
+    except Exception as e:
+        print(f"[PX4] Error stopping RTSP viewer: {str(e)}")
+        return False
