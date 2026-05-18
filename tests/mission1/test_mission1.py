@@ -20,7 +20,7 @@ KEEP_PX4_RUNNING = False
 CURRENT_PHASE = None
 SHUTTING_DOWN = False
 
-
+#load json file from path
 def load_json(path):
     with open(path, "r", encoding="utf-8") as f:
         return json.load(f)
@@ -35,6 +35,12 @@ def save_json(path, data):
 
 
 def terminate_process(proc, label, timeout=10.0):
+    """
+    asks a sigint, sigterm and sigkill respectively
+    sigint for a safe ask stop, sigterm for a ask to kill,
+    sigkill for a forced kill of a prcoess. label is for
+    the process
+    """
     if proc.poll() is not None:
         return
 
@@ -76,6 +82,7 @@ def terminate_process(proc, label, timeout=10.0):
 
 
 def shutdown_current_phase():
+    #kills the current phase process
     global CURRENT_PHASE
     if CURRENT_PHASE is not None and CURRENT_PHASE.poll() is None:
         terminate_process(CURRENT_PHASE, "active mission phase")
@@ -93,6 +100,7 @@ def handle_shutdown(signum, _frame):
 
 
 def run_phase(script_name, args):
+    #runs a file as a subprocess (like laps for example)
     global CURRENT_PHASE
     cmd = [sys.executable, str(SCRIPT_DIR / script_name), *args]
     print(f"[MISSION1] Running: {' '.join(cmd)}", flush=True)
@@ -133,7 +141,7 @@ def navigate_or_print(coord, dry_run, label):
     movement = import_movement()
     return bool(movement.navigate_to_coordinate(lat, lon))
 
-
+#formatting coordinates as command line arguments to be passed in subprocess scripts
 def coord_args(prefix, coord):
     return [
         f"--{prefix}-lat",

@@ -206,7 +206,7 @@ def navigate_to_coordinate(
 
         horizontal_distance = math.hypot(current_pos["x"] - target_x, current_pos["y"] - target_y)
         altitude_error = abs(current_pos["z"] - target_alt)
-        px4.send_position_setpoint(target_x, target_y, target_alt, yaw=px4._mission_yaw, yaw_from_direction=False,)
+        px4.send_position_setpoint(target_x, target_y, target_alt, yaw=None, yaw_from_direction=True)
 
         now = time.time()
         if now - last_log >= 1.0:
