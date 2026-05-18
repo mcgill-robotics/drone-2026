@@ -1,0 +1,20 @@
+{
+  "h1_lo": 0,
+  "h1_hi": 10,
+  "h2_lo": 160,
+  "h2_hi": 180,
+  "s_lo": 40,
+  "s_hi": 245,
+  "v_lo": 120,
+  "v_hi": 255,
+  "min_area": 3000,
+  "circularity": 0.6,
+  "aspect": 0.65,
+  "solidity": 0.9,
+  "dry_h1_lo": 0,
+  "dry_h1_hi": 10,
+  "dry_h2_lo": 160,
+  "dry_h2_hi": 180,
+  "dry_s_min": 25,
+  "dry_hue_frac": 0.5
+}
