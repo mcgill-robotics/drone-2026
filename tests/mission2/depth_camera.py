@@ -10,7 +10,7 @@ from __future__ import annotations
 import threading
 import time
 from dataclasses import dataclass
-from typing import Callable, Optional
+from typing import Optional
 
 try:
     import numpy as np
@@ -26,6 +26,33 @@ except ImportError:
     CvBridge = None
 
 DEPTH_CAMERA_TOPIC = "/camera/aligned_depth_to_color/image_raw"
+SIM_DEPTH_CAMERA_TOPIC = "/camera/depth/image_raw"
+
+
+@dataclass(frozen=True)
+class DepthCameraProfile:
+    """Configuration for a depth-camera source."""
+
+    name: str
+    topic: str
+    depth_scale_m: float | None
+    center_fraction: tuple[float, float] = (0.30, 0.70)
+    left_fraction: tuple[float, float] = (0.00, 0.30)
+    right_fraction: tuple[float, float] = (0.70, 1.00)
+    row_fraction: tuple[float, float] = (0.25, 0.75)
+
+
+D455_DEPTH_PROFILE = DepthCameraProfile(
+    name="d455",
+    topic=DEPTH_CAMERA_TOPIC,
+    depth_scale_m=0.001,
+)
+
+SIM_DEPTH_PROFILE = DepthCameraProfile(
+    name="sim",
+    topic=SIM_DEPTH_CAMERA_TOPIC,
+    depth_scale_m=1.0,
+)
 # TODO: Process depth frame to extract relevant measurements (center, left, right)
 # TODO: Handle depth frame coordinate system and camera calibration
 
@@ -54,7 +81,13 @@ class DepthCameraInterface:
     TODO: Implement actual ROS 2 depth camera subscriber and frame processing.
     """
 
-    def __init__(self, node=None, topic: str = DEPTH_CAMERA_TOPIC):
+    def __init__(
+        self,
+        node=None,
+        topic: str | None = None,
+        profile: str | DepthCameraProfile = D455_DEPTH_PROFILE,
+        depth_scale_m: float | None = None,
+    ):
         """Initialize depth camera interface."""
         self.current_reading: Optional[DepthReading] = None
         self._lock = threading.Lock()
@@ -64,6 +97,20 @@ class DepthCameraInterface:
         self._owns_node = node is None
         self._max_distance_m = 10.0  # Maximum sensed distance
         self._min_distance_m = 0.1   # Minimum sensed distance (blind spot)
+        self._cv_bridge = None
+
+        if isinstance(profile, str):
+            profile_map = {
+                "d455": D455_DEPTH_PROFILE,
+                "realsense": D455_DEPTH_PROFILE,
+                "sim": SIM_DEPTH_PROFILE,
+                "gz_x500_depth": SIM_DEPTH_PROFILE,
+            }
+            profile = profile_map.get(profile.lower(), D455_DEPTH_PROFILE)
+
+        self._profile = profile
+        self._depth_scale_m = depth_scale_m if depth_scale_m is not None else profile.depth_scale_m
+        self._topic = topic or profile.topic
 
         if rclpy is None or Image is None:
             print("[DEPTH] ROS 2 depth camera dependencies unavailable; subscriber disabled")
@@ -77,7 +124,7 @@ class DepthCameraInterface:
 
             self._subscriber = self._node.create_subscription(
                 Image,
-                topic,
+                self._topic,
                 self._depth_callback,
                 qos_profile_sensor_data,
             )
@@ -90,43 +137,117 @@ class DepthCameraInterface:
                 )
                 self._spin_thread.start()
 
-            print(f"[DEPTH] Subscribed to depth camera topic: {topic}")
+            print(f"[DEPTH] Subscribed to depth camera topic: {self._topic} ({self._profile.name})")
         except Exception as exc:
             self._subscriber = None
             print(f"[DEPTH] Failed to initialize depth camera subscriber: {exc}")
 
+    def _depth_to_meters(self, msg):
+        # Must have numpy available to decode image bytes
+        if np is None:
+            return None
+
+        # Prefer CvBridge when available for encoding handling
+        if CvBridge is not None:
+            try:
+                if self._cv_bridge is None:
+                    self._cv_bridge = CvBridge()
+                depth_array = self._cv_bridge.imgmsg_to_cv2(msg, desired_encoding="passthrough")
+                depth_array = np.asarray(depth_array)
+                if depth_array.ndim == 3 and depth_array.shape[2] == 1:
+                    depth_array = depth_array[:, :, 0]
+
+                if np.issubdtype(depth_array.dtype, np.floating):
+                    depth_m = depth_array.astype(np.float32, copy=False)
+                else:
+                    scale_m = self._depth_scale_m if self._depth_scale_m is not None else 1.0
+                    depth_m = depth_array.astype(np.float32) * float(scale_m)
+
+                depth_m = np.asarray(depth_m)
+                depth_m[depth_array == 0] = np.nan
+                return depth_m
+            except Exception:
+                # Fall through to manual decode
+                pass
+
+        # Manual decode fallback (no CvBridge). Support common encodings.
+        try:
+            encoding = (getattr(msg, "encoding", "") or "").lower()
+            height = int(msg.height)
+            width = int(msg.width)
+            is_big = bool(getattr(msg, "is_bigendian", False))
+            data = msg.data
+
+            # Map encoding -> (numpy dtype, scale applies?)
+            if "16" in encoding or encoding in {"16uc1", "mono16", "z16"}:
+                dtype = np.dtype(">u2") if is_big else np.dtype("<u2")
+                arr = np.frombuffer(data, dtype=dtype)
+                if arr.size != height * width:
+                    arr = arr[: height * width]
+                arr = arr.reshape((height, width))
+                scale_m = self._depth_scale_m if self._depth_scale_m is not None else 1.0
+                depth_m = arr.astype(np.float32) * float(scale_m)
+
+            elif "32f" in encoding or "float32" in encoding or encoding in {"32fc1"}:
+                dtype = np.dtype(">f4") if is_big else np.dtype("<f4")
+                arr = np.frombuffer(data, dtype=dtype)
+                if arr.size != height * width:
+                    arr = arr[: height * width]
+                arr = arr.reshape((height, width))
+                depth_m = arr.astype(np.float32)
+
+            elif "8u" in encoding or encoding in {"mono8", "rgb8", "bgr8"}:
+                # Unusual for depth, but handle gracefully
+                dtype = np.dtype("u1")
+                arr = np.frombuffer(data, dtype=dtype)
+                if arr.size != height * width:
+                    arr = arr[: height * width]
+                arr = arr.reshape((height, width))
+                scale_m = self._depth_scale_m if self._depth_scale_m is not None else 1.0
+                depth_m = arr.astype(np.float32) * float(scale_m)
+
+            else:
+                # Unknown encoding — cannot decode without CvBridge
+                return None
+
+            depth_m = np.asarray(depth_m)
+            # Treat zero as missing measurement
+            try:
+                depth_m[np.asarray(depth_m) == 0] = np.nan
+            except Exception:
+                pass
+            return depth_m
+        except Exception as exc:
+            print(f"[DEPTH] Manual decode failed: {exc}")
+            return None
+
     def _depth_callback(self, msg):
         """
-        Process RealSense D455 depth image message.
+        Process a depth image message from either the real D455 or the sim camera.
         
         Extracts center/left/right distances and updates current_reading.
-        RealSense publishes uint16 depth in millimeters.
         """
         if np is None or CvBridge is None:
             return
         
         try:
-            bridge = CvBridge()
-            
-            # Convert ROS Image to numpy (uint16, depth in mm)
-            depth_array = bridge.imgmsg_to_cv2(msg, desired_encoding="passthrough")
+            depth_m = self._depth_to_meters(msg)
+            if depth_m is None:
+                return
+
+            depth_array = np.asarray(depth_m)
             height, width = depth_array.shape
-            
-            # Convert mm to meters, filter invalid readings (0 = no data)
-            depth_m = depth_array.astype(float) / 1000.0
-            depth_m[depth_array == 0] = np.nan
-            
-            # Extract regions: center 40%, left 30%, right 30%
-            center_col_start = int(width * 0.30)
-            center_col_end = int(width * 0.70)
-            left_col_start = int(width * 0.0)
-            left_col_end = int(width * 0.30)
-            right_col_start = int(width * 0.70)
-            right_col_end = int(width * 1.0)
-            
-            # Use middle rows (ignore top/bottom edges due to camera angle)
-            row_start = int(height * 0.25)
-            row_end = int(height * 0.75)
+
+            # Extract regions from the lower-middle part of the frame where the wall is most visible.
+            center_col_start = int(width * self._profile.center_fraction[0])
+            center_col_end = int(width * self._profile.center_fraction[1])
+            left_col_start = int(width * self._profile.left_fraction[0])
+            left_col_end = int(width * self._profile.left_fraction[1])
+            right_col_start = int(width * self._profile.right_fraction[0])
+            right_col_end = int(width * self._profile.right_fraction[1])
+
+            row_start = int(height * self._profile.row_fraction[0])
+            row_end = int(height * self._profile.row_fraction[1])
             
             center_region = depth_m[row_start:row_end, center_col_start:center_col_end]
             left_region = depth_m[row_start:row_end, left_col_start:left_col_end]

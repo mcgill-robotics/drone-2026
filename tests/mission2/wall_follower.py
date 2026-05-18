@@ -239,9 +239,25 @@ class WallFollower:
             
             if obstacle_on_side:
                 print(f"[WALL] [OA] Obstacle detected on {direction_str}; requesting safe waypoint")
-                # TODO: Call avoider_callback to get detour waypoint
-                # For now, just reduce strafe speed
-                strafe_speed_vy *= 0.5
+                if self.avoider_callback is not None:
+                    try:
+                        handled = self.avoider_callback({
+                            "side": direction_str,
+                            "current_wall": self.current_wall.value if self.current_wall else None,
+                        })
+                        if handled:
+                            print("[WALL] [OA] Avoider handled obstacle; resuming strafing after detour")
+                            time.sleep(0.5)
+                            continue
+                        else:
+                            print("[WALL] [OA] Avoider returned no detour; slowing strafe")
+                            strafe_speed_vy *= 0.5
+                    except Exception as exc:
+                        print(f"[WALL] [OA] Avoider callback exception: {exc}")
+                        strafe_speed_vy *= 0.5
+                else:
+                    # No avoider provided; slow down and continue
+                    strafe_speed_vy *= 0.5
             
             # Send strafing velocity
             self.send_velocity(vx, strafe_speed_vy, 0.0, 0.0)

@@ -42,6 +42,19 @@ def main():
     parser.add_argument("--sitl", action="store_true", help="Use SITL simulation")
     parser.add_argument("--dry-run", action="store_true", help="Dry run (no flight)")
     parser.add_argument("--takeoff-alt", type=float, default=5.0, help="Takeoff altitude (m)")
+    parser.add_argument(
+        "--depth-backend",
+        choices=["auto", "d455", "sim"],
+        default="auto",
+        help="Depth camera preset to use",
+    )
+    parser.add_argument("--depth-topic", type=str, default=None, help="Override the depth image topic")
+    parser.add_argument(
+        "--depth-scale-m",
+        type=float,
+        default=None,
+        help="Override integer depth units to metres conversion",
+    )
     
     args = parser.parse_args()
     
@@ -94,7 +107,15 @@ def main():
         print("[MISSION2] Phase 4: Initializing depth camera and wall follower")
         print("="*60)
         
-        depth_camera = DepthCameraInterface()
+        depth_backend = args.depth_backend
+        if depth_backend == "auto":
+            depth_backend = "sim" if args.sitl else "d455"
+
+        depth_camera = DepthCameraInterface(
+            profile=depth_backend,
+            topic=args.depth_topic,
+            depth_scale_m=args.depth_scale_m,
+        )
         
         # TODO: Consider integrating OA bridge for obstacle avoidance
         # The wall_follower has a callback for this, but it needs:
@@ -109,11 +130,51 @@ def main():
             approach_speed_mps=0.3,
         )
         
+        # Simple OA callback: when the wall follower detects an obstacle on the
+        # strafing side, this callback performs a short GPS-offset detour using
+        # `movement.navigate_to_coordinate`. It returns True when the detour
+        # completed successfully (wall follower can resume strafing), or False
+        # to indicate no detour was possible.
+        def _local_offset_to_gps(current_gps, north_m: float, east_m: float):
+            # Very small-angle flat-earth approximation
+            lat = float(current_gps["latitude"]) + (north_m / 111320.0)
+            lon = float(current_gps["longitude"]) + (east_m / (111320.0 * math.cos(math.radians(float(current_gps["latitude"])))))
+            return lat, lon
+
+        def oa_avoider_callback(info: dict) -> bool:
+            side = info.get("side", "right")
+            try:
+                px4 = movement.connect()
+                current_pos = px4.get_location()
+                current_gps = px4.get_gps_location()
+                if not current_pos or not current_gps:
+                    print("[MISSION2][OA] Cannot query current position for detour")
+                    return False
+
+                # Build a short lateral-forward offset away from the obstacle
+                lateral_m = 3.0 if side == "right" else -3.0
+                forward_m = 2.0
+
+                target_lat, target_lon = _local_offset_to_gps(current_gps, forward_m, lateral_m)
+                print(f"[MISSION2][OA] Detour waypoint: lat={target_lat:.7f}, lon={target_lon:.7f}")
+
+                # Navigate to the detour waypoint (short hop)
+                ok = movement.navigate_to_coordinate(target_lat, target_lon, alt_agl=0.0, timeout=30.0)
+                if not ok:
+                    print("[MISSION2][OA] Detour navigation failed")
+                    return False
+                # After detour, short hover to let sensors stabilise
+                time.sleep(0.5)
+                return True
+            except Exception as exc:
+                print(f"[MISSION2][OA] Avoider callback error: {exc}")
+                return False
+
         wall_follower = WallFollower(
             depth_camera=depth_camera,
             movement_send_velocity=movement.send_velocity_command,
             movement_hold_position=movement.hold_position,
-            avoider_callback=None,  # TODO: Connect OA bridge if available
+            avoider_callback=oa_avoider_callback,
             config=wall_config,
         )
         

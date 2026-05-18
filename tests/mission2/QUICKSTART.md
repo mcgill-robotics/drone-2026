@@ -47,10 +47,11 @@ make px4_sitl gazebo_x500
 python3 /path/to/test_mission2.py \
   --lat 37.7749 \
   --lon -122.4194 \
-  --sitl
+   --sitl \
+   --depth-backend sim
 ```
 
-**Note:** Depth camera will show warnings (not subscribed yet) but won't prevent flight
+**Note:** Use `--depth-backend sim` for Gazebo/PX4 depth topics, or `--depth-backend d455` for the real Intel camera. You can also override the topic with `--depth-topic` if your sim plugin publishes somewhere else.
 
 ## Real Hardware
 
@@ -61,6 +62,8 @@ python3 tests/mission2/test_mission2.py \
   --lat 37.7749 \
   --lon -122.4194
 ```
+
+To force a specific source, add `--depth-backend d455` or `--depth-backend sim`.
 
 **Requirements:**
 - PX4 running on FC (Pixhawk, etc.)

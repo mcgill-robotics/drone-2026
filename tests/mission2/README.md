@@ -145,7 +145,8 @@ python3 tests/mission2/test_mission2.py \
 ### High Priority
 
 1. **Depth Camera ROS Subscriber (depth_camera.py)**
-   - Subscribe to `/camera/aligned_depth_to_color/image_raw` (Intel RealSense) or similar
+   - Support `d455` and `sim` presets, with `--depth-topic` / `--depth-scale-m` overrides
+   - Subscribe to `/camera/aligned_depth_to_color/image_raw` (Intel RealSense) or the Gazebo depth topic configured at runtime
    - Process depth frame to extract center/left/right regions
    - Handle NaN/invalid values (too far, too close, occlusions)
    - Maintain rolling history for trend detection
