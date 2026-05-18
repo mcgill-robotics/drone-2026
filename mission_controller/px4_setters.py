@@ -268,6 +268,10 @@ class PX4Setters:
         Args:
             altitude: Target altitude in meters
             timeout: Timeout in seconds
+        
+        NOTE: If called while in OFFBOARD mode, stays in OFFBOARD.
+              Otherwise switches to GUIDED mode for takeoff.
+              OFFBOARD is required for position setpoint yaw control.
         """
         if not self.connected:
             print("[PX4] Not connected to MAVROS, cannot takeoff")
@@ -282,11 +286,19 @@ class PX4Setters:
                 if not self.arm_vehicle():
                     return False
 
-            # Some setups use GUIDED, some use OFFBOARD.
-            # Keep this comment because it is useful during debugging.
-            if not self.change_mode("GUIDED"):
-                print("[PX4][WARN] GUIDED mode failed. If using PX4, you may need OFFBOARD instead.")
-                return False
+            # Check if already in OFFBOARD mode
+            current_mode = None
+            if self.current_state:
+                current_mode = self.current_state.mode
+            
+            # If not in OFFBOARD, switch to GUIDED
+            if current_mode != "OFFBOARD":
+                print("[PX4] Not in OFFBOARD mode, switching to GUIDED for takeoff...")
+                if not self.change_mode("GUIDED"):
+                    print("[PX4][WARN] GUIDED mode failed. If using PX4, you may need OFFBOARD instead.")
+                    return False
+            else:
+                print("[PX4] Already in OFFBOARD mode, maintaining for takeoff...")
 
             req = CommandTOL.Request() # takeoff and land request
             req.altitude = float(altitude)
