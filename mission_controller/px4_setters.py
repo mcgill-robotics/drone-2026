@@ -16,7 +16,8 @@ It assumes the main interface object already created:
 import time
 import rclpy
 import threading
-from geometry_msgs.msg import PoseStamped, TwistStamped
+import math
+from geometry_msgs.msg import PoseStamped, TwistStamped, Quaternion
 from mavros_msgs.srv import CommandBool, SetMode, CommandTOL, ParamSet
 from mavros_msgs.msg import ParamValue
 
@@ -394,12 +395,18 @@ class PX4Setters:
             print(f"[PX4] Navigation failed: {str(e)}")
             return False
 
-    def send_position_setpoint(self, x, y, z):
+    def send_position_setpoint(self, x, y, z, yaw=None, yaw_from_direction=False):
         """
         Publish a local position setpoint.
 
+        Args:
+            x, y, z: Position in local NED coordinates
+            yaw: Desired yaw heading in radians (if yaw_from_direction=False)
+            yaw_from_direction: If True, calculate yaw from direction to target
+                               (requires current_position to be available)
+
         NOTE:
-        This is a topic publish , not a service call. (messages vs services)
+        This is a topic publish, not a service call. (messages vs services)
         In other words, the following functions below just send a command,
         but do not expect a response.
         """
@@ -410,6 +417,29 @@ class PX4Setters:
             msg.pose.position.x = float(x)
             msg.pose.position.y = float(y)
             msg.pose.position.z = self._clamp_alt(float(z))
+            
+            # Set orientation (default: no rotation - level flight)
+            current_yaw = yaw if yaw is not None else 0.0
+            
+            # If yaw_from_direction=True, calculate yaw from direction to target
+            if yaw_from_direction:
+                current_pos = self.get_location()
+                if current_pos:
+                    dx = x - current_pos["x"]
+                    dy = y - current_pos["y"]
+                    current_yaw = math.atan2(dy, dx)
+            
+            # Convert yaw (heading angle) to quaternion (roll=0, pitch=0)
+            # Formula: q = [sin(yaw/2)*z_axis_component, cos(yaw/2)]
+            yaw_rad = float(current_yaw)
+            half_yaw = yaw_rad / 2.0
+            msg.pose.orientation = Quaternion(
+                x=0.0,
+                y=0.0,
+                z=math.sin(half_yaw),
+                w=math.cos(half_yaw)
+            )
+            
             self.setpoint_pub.publish(msg)
             return True
         except Exception as e:
