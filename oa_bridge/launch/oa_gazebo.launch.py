@@ -2,12 +2,15 @@
 oa_gazebo.launch.py — bring up the ROS 2 side of the Gazebo OA stack.
 
 Starts:
-  1. MAVROS          — PX4 SITL  <->  ROS 2 bridge
-  2. ros_gz_bridge   — Gazebo 2-D lidar (gz.msgs.LaserScan) -> sensor_msgs/LaserScan
-  3. oa_ros2_node    — the obstacle-avoidance controller
+  1. MAVROS                    — PX4 SITL  <->  ROS 2 bridge
+  2. gazebo_lidar_bridge.py    — Gazebo 2-D lidar (gz.msgs.LaserScan) -> sensor_msgs/LaserScan
+  3. oa_ros2_node             — the obstacle-avoidance controller
 
 It does NOT start PX4 SITL + Gazebo itself — that is launched from the
 PX4-Autopilot tree (`make px4_sitl gz_x500_lidar_2d`). See README_GAZEBO.md.
+
+Note: Uses custom gazebo_lidar_bridge.py (not ros_gz_bridge) to work around
+protobuf version mismatch issues.
 
 Example:
   ros2 launch oa_bridge/launch/oa_gazebo.launch.py \\
@@ -69,17 +72,18 @@ def generate_launch_description():
     )
 
     # ── 2. Gazebo lidar -> ROS 2 LaserScan bridge ────────────────────────
-    # `parameter_bridge` arg form:  <ros_topic>@<ros_type>[<gz_type>
-    # The trailing `[` means gz -> ROS only (sensor data is one-way).
-    gz_bridge = Node(
-        package="ros_gz_bridge",
-        executable="parameter_bridge",
-        name="oa_lidar_bridge",
-        output="screen",
-        arguments=[
-            ros_lidar_topic + "@sensor_msgs/msg/LaserScan[gz.msgs.LaserScan",
-            gz_lidar_topic,
+    # Custom Python bridge that uses `gz topic -e` to workaround ros_gz_bridge
+    # protobuf version mismatch. See gazebo_lidar_bridge.py for details.
+    gz_bridge = ExecuteProcess(
+        cmd=[
+            "python3",
+            PathJoinSubstitution([
+                os.path.dirname(os.path.abspath(__file__)), "..", "gazebo_lidar_bridge.py"
+            ]),
+            "--gz-topic", gz_lidar_topic,
+            "--ros-topic", ros_lidar_topic,
         ],
+        output="screen",
     )
 
     # ── 3. OA controller node ────────────────────────────────────────────

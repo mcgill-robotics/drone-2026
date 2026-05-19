@@ -42,7 +42,7 @@ from mavros_msgs.msg import (
     RTKBaseline,
 )
 from mavros_msgs.srv import CommandBool, SetMode, CommandTOL, CommandHome, ParamGet, ParamPull, ParamSet
-from sensor_msgs.msg import BatteryState, NavSatFix, Imu
+from sensor_msgs.msg import BatteryState, NavSatFix, Imu, LaserScan
 #from types import Point
 
 
@@ -57,7 +57,7 @@ class PX4Getters(Node):
     - exposing getter APIs for the rest of the system
     """
 
-    def __init__(self, node_name="ardupilot_interface", namespace="mavros"):
+    def __init__(self, node_name="ardupilot_interface", namespace="mavros", lidar_topic="/lidar/scan"):
         """
         Initialize MAVROS getter interface
 
@@ -93,6 +93,7 @@ class PX4Getters(Node):
         self.current_velocity_body = None
         self.current_velocity_local = None
         self.current_altitude = None
+        self.current_lidar_scan = None
         self.current_gps_raw_1 = None
         self.current_gps_raw_2 = None
         self.current_gps_velocity = None
@@ -117,6 +118,7 @@ class PX4Getters(Node):
         self._seen_velocity_body = False
         self._seen_velocity_local = False
         self._seen_altitude = False
+        self._seen_lidar_scan = False
         self._seen_gps_raw_1 = False
         self._seen_gps_raw_2 = False
         self._seen_gps_velocity = False
@@ -143,6 +145,7 @@ class PX4Getters(Node):
         self._last_velocity_body_time = None
         self._last_velocity_local_time = None
         self._last_altitude_time = None
+        self._last_lidar_scan_time = None
         self._last_gps_raw_1_time = None
         self._last_gps_raw_2_time = None
         self._last_gps_velocity_time = None
@@ -247,6 +250,14 @@ class PX4Getters(Node):
             Altitude,
             f"/{namespace}/altitude",
             self._altitude_callback,
+            qos_profile_sensor_data
+        )
+
+        # VLP16 or Gazebo-bridged lidar scan topic
+        self.lidar_scan_sub = self.create_subscription(
+            LaserScan,
+            lidar_topic,
+            self._lidar_scan_callback,
             qos_profile_sensor_data
         )
 
@@ -438,6 +449,14 @@ class PX4Getters(Node):
         if not self._seen_altitude:
             print(f"[PX4] Receiving altitude: relative={msg.relative:.2f}, amsl={msg.amsl:.2f}")
             self._seen_altitude = True
+
+    def _lidar_scan_callback(self, msg):
+        """Update lidar scan data"""
+        self.current_lidar_scan = msg
+        self._last_lidar_scan_time = time.time()
+        if not self._seen_lidar_scan:
+            print(f"[PX4] Receiving lidar scan: ranges={len(msg.ranges)}, frame_id={msg.header.frame_id}")
+            self._seen_lidar_scan = True
 
     def _gps_raw_1_callback(self, msg):
         """Update GPS1 raw data"""
@@ -832,6 +851,36 @@ class PX4Getters(Node):
             print(f"[PX4][ERROR] Failed to get altitude data: {str(e)}")
             return None
 
+    def get_lidar_scan(self):
+        """Get latest lidar scan as a structured dict"""
+        if not self.current_lidar_scan:
+            self._warn_missing_telemetry("lidar/scan")
+            return None
+
+        try:
+            scan = self.current_lidar_scan
+            return {
+                "header": {
+                    "stamp": {
+                        "sec": scan.header.stamp.sec,
+                        "nanosec": scan.header.stamp.nanosec,
+                    },
+                    "frame_id": scan.header.frame_id,
+                },
+                "angle_min": scan.angle_min,
+                "angle_max": scan.angle_max,
+                "angle_increment": scan.angle_increment,
+                "time_increment": scan.time_increment,
+                "scan_time": scan.scan_time,
+                "range_min": scan.range_min,
+                "range_max": scan.range_max,
+                "ranges": list(scan.ranges),
+                "intensities": list(scan.intensities),
+            }
+        except Exception as e:
+            print(f"[PX4][ERROR] Failed to get lidar scan: {str(e)}")
+            return None
+
     def get_gps_raw_fix(self):
         """Get /global_position/raw/fix GPS data"""
         if not self.current_gps_raw_fix:
@@ -968,6 +1017,7 @@ class PX4Getters(Node):
             "velocity_local": self.get_velocity_local(),
             "acceleration": self.get_acceleration(),
             "altitude": self.get_altitude_data(),
+            "lidar_scan": self.get_lidar_scan(),
             "gps_raw_1": self.get_gps_raw(1),
             "gps_raw_2": self.get_gps_raw(2),
             "gps_velocity": self.get_gps_velocity(),
