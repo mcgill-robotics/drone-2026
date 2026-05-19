@@ -12,7 +12,7 @@ class PhysicsConfig:
     # Mass and force limits
     mass: float = 1.0
     max_force: float = 5.0     # was 55.0 pixels
-    max_speed: float = 3.0     # was 30.0 pixels, now metres/second
+    max_speed: float = 1.0     # was 30.0 pixels, now metres/second
 
     # Air resistance (velocity damping factor)
     air_resistance: float = 0.98

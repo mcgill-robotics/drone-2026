@@ -45,10 +45,10 @@ class AvoidanceConfig:
         'CORRIDOR': ScanRadiusConfig(53.0, 98.0),
         '''
         # scan_radius entries — divide original values by ~20 (pixel-to-metre ratio)
-        'SPARSE': ScanRadiusConfig(1.9, 3.4),
-        'MODERATE': ScanRadiusConfig(2.25, 4.1),
-        'DENSE': ScanRadiusConfig(2.65, 4.9),
-        'CORRIDOR': ScanRadiusConfig(2.65, 4.9),
+        'SPARSE': ScanRadiusConfig(2.2, 3.0),
+        'MODERATE': ScanRadiusConfig(2.2, 3.0),
+        'DENSE': ScanRadiusConfig(1.4, 2.6),
+        'CORRIDOR': ScanRadiusConfig(1.4, 2.6),
     })
 
     # Force profiles per environment type

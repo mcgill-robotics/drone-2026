@@ -160,7 +160,14 @@ class OAController:
             return True
 
         v = self.robot.vel
-        self.px4.send_velocity_setpoint(v.x, v.y, v.z, self.robot.yaw_rate)
+        
+        # Keep horizontal (XY) avoidance, but replace Z with altitude hold/climb
+        # Calculate Z velocity to maintain/reach target altitude
+        z_error = self.target[2] - pos.z
+        z_vel = 0.3 * z_error  # Simple proportional controller (0.3 m/s per meter error)
+        z_vel = max(-0.5, min(0.5, z_vel))  # Clamp to ±0.5 m/s
+        
+        self.px4.send_velocity_setpoint(v.x, v.y, z_vel, self.robot.yaw_rate)
         return False
 
 

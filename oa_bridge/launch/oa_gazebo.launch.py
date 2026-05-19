@@ -77,10 +77,9 @@ def generate_launch_description():
         name="oa_lidar_bridge",
         output="screen",
         arguments=[
-            [gz_lidar_topic, "@sensor_msgs/msg/LaserScan[gz.msgs.LaserScan"],
+            ros_lidar_topic + "@sensor_msgs/msg/LaserScan[gz.msgs.LaserScan",
+            gz_lidar_topic,
         ],
-        # Remap the gz topic name onto the clean ROS topic the OA node expects.
-        remappings=[(gz_lidar_topic, ros_lidar_topic)],
     )
 
     # ── 3. OA controller node ────────────────────────────────────────────
