@@ -98,6 +98,9 @@ python3 oa_bridge/oa_ros2_node.py --target-x 20 --target-y 0 --target-z 3
 | `--lidar-topic` | `/scan` | LaserScan topic |
 | `--beam-stride` | `1` | Use every Nth lidar beam (raise it to thin dense scans) |
 | `--max-range` | `8.0` | Ignore lidar returns past this range (m) |
+| `--voxel-size` | `0.4` | Downsample lidar obstacles to one point per this XY cell (m) |
+| `--scan-timeout` | `0.5` | Hover in place if no LaserScan arrives within this many seconds |
+| `--brake-distance` | `0.8` | Hard-stop: brake to a hover if any lidar return is closer than this (m) |
 | `--fcu-url` | `udp://:14540@127.0.0.1:14557` | MAVROS FCU URL |
 | `--boot-mavros` | off | Launch MAVROS itself instead of assuming it runs |
 | `--no-land` | off | Hover at the target instead of landing |

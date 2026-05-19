@@ -44,53 +44,67 @@ class AvoidanceConfig:
         'DENSE': ScanRadiusConfig(53.0, 98.0),
         'CORRIDOR': ScanRadiusConfig(53.0, 98.0),
         '''
-        # scan_radius entries — divide original values by ~20 (pixel-to-metre ratio)
+        # scan_radius entries — distance (m) at which obstacles trigger
+        # avoidance. DENSE/CORRIDOR were 1.4 m, too short for a 1 m/s drone to
+        # react to a wall; bumped to 2.0 m. Must stay < EnvironmentConfig
+        # scan_area_radius (5 m) and the node's --max-range (8 m).
         'SPARSE': ScanRadiusConfig(2.2, 3.0),
         'MODERATE': ScanRadiusConfig(2.2, 3.0),
-        'DENSE': ScanRadiusConfig(1.4, 2.6),
-        'CORRIDOR': ScanRadiusConfig(1.4, 2.6),
+        'DENSE': ScanRadiusConfig(2.0, 3.0),
+        'CORRIDOR': ScanRadiusConfig(2.0, 3.0),
     })
 
-    # Force profiles per environment type
+    # Force profiles per environment type.
+    # PhysicsConfig.max_force is 5.0 N — apply_force() clamps the total force
+    # magnitude to it. The original values (tens-to-hundreds) were pixel-space
+    # leftovers that saturated the clamp on every tick, so urgency scaling did
+    # nothing. Rescaled by ~1/80 so forces land within the 5 N budget and
+    # urgency actually modulates the response.
+    #
+    # low_speed_threshold was 10.0 — another pixel-space leftover. With
+    # max_speed = 1 m/s the drone was always "below" 10, so it always took the
+    # raw tangent-push branch and steering_gain (velocity-based steering) was
+    # dead code. Converted to 0.3 m/s: steer smoothly while cruising, fall back
+    # to a hard tangent push only when nearly stopped against a wall.
     sparse: EnvironmentForceProfile = field(default_factory=lambda: EnvironmentForceProfile(
-        normal_base=80.0,
-        normal_urgency_mult=400.0,
-        tangent_base=30.0,
+        normal_base=1.0,
+        normal_urgency_mult=5.0,
+        tangent_base=0.4,
         tangent_urgency_mult=0.0,
-        steering_gain=0.0,
-        low_speed_threshold=10.0,
+        steering_gain=2.0,
+        low_speed_threshold=0.3,
         low_speed_mult=1.0
     ))
 
     moderate: EnvironmentForceProfile = field(default_factory=lambda: EnvironmentForceProfile(
-        normal_base=50.0,
-        normal_urgency_mult=300.0,
-        tangent_base=180.0,
-        tangent_urgency_mult=100.0,
+        normal_base=0.6,
+        normal_urgency_mult=3.5,
+        tangent_base=2.0,
+        tangent_urgency_mult=1.2,
         steering_gain=2.5,
-        low_speed_threshold=10.0,
+        low_speed_threshold=0.3,
         low_speed_mult=1.3
     ))
 
     dense: EnvironmentForceProfile = field(default_factory=lambda: EnvironmentForceProfile(
-        normal_base=40.0,
-        normal_urgency_mult=350.0,
-        tangent_base=220.0,
-        tangent_urgency_mult=140.0,
-        steering_gain=3.5,
-        low_speed_threshold=10.0,
+        normal_base=0.5,
+        normal_urgency_mult=4.0,
+        tangent_base=2.8,
+        tangent_urgency_mult=1.6,
+        steering_gain=3.0,
+        low_speed_threshold=0.3,
         low_speed_mult=1.4
     ))
 
     corridor: EnvironmentForceProfile = field(default_factory=lambda: EnvironmentForceProfile(
-        normal_base=25.0,
-        normal_urgency_mult=250.0,
-        tangent_base=250.0,
-        tangent_urgency_mult=180.0,
-        steering_gain=0.0,
-        low_speed_threshold=10.0,
+        normal_base=0.3,
+        normal_urgency_mult=3.0,
+        tangent_base=3.0,
+        tangent_urgency_mult=2.2,
+        steering_gain=2.5,
+        low_speed_threshold=0.3,
         low_speed_mult=1.0,
-        goal_force_strength=120.0
+        goal_force_strength=1.5
     ))
 
     # Memory thresholds (steps before resetting wall-following mode)

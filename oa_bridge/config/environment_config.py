@@ -16,9 +16,16 @@ class EnvironmentConfig:
     look_ahead_distance_base: float = 1.0  # was 40.0 pixels
     look_ahead_velocity_mult: float = 1.5  # fine, it's a multiplier
 
-    # Environment classification thresholds
-    density_threshold_dense: float = 0.08      # Density above this is DENSE
-    density_threshold_moderate: float = 0.03   # Density above this is MODERATE
+    # Environment classification thresholds.
+    # density = (obstacles within scan_area_radius) / sphere_volume * 1000.
+    # With scan_area_radius=5 m the volume is ~524 m³, so density ≈ 1.9 * count.
+    # The lidar bridge voxel-downsamples obstacles (~one point per 0.4 m), so a
+    # typical wall in view is a few dozen points. The old 0.03/0.08 thresholds
+    # were pixel-space leftovers — they made every non-empty scan read as DENSE.
+    #   MODERATE: ~6+ obstacle points near the drone
+    #   DENSE:    ~30+ obstacle points near the drone
+    density_threshold_dense: float = 55.0      # Density above this is DENSE
+    density_threshold_moderate: float = 10.0   # Density above this is MODERATE
     corridor_confidence_threshold: float = 0.6 # Corridor detection confidence threshold
 
     # Corridor detection parameters

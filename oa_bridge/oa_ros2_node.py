@@ -68,10 +68,14 @@ class OAController:
     """
 
     def __init__(self, px4, target, lidar_topic=DEFAULT_LIDAR_TOPIC,
-                 beam_stride=1, max_range=MAX_DETECT_RANGE):
+                 beam_stride=1, max_range=MAX_DETECT_RANGE, voxel_size=0.4,
+                 scan_timeout=0.5, brake_distance=0.8):
         self.px4 = px4
         self.beam_stride = max(1, int(beam_stride))
         self.max_range = float(max_range)
+        self.voxel_size = max(0.05, float(voxel_size))
+        self.scan_timeout = max(0.1, float(scan_timeout))
+        self.brake_distance = max(0.0, float(brake_distance))
 
         # OA core. Starting position is overwritten every tick from MAVROS, so
         # the (0,0,0) here is just a placeholder.
@@ -81,6 +85,9 @@ class OAController:
 
         self.latest_scan = None
         self._scan_count = 0
+        self._scan_stamp = None     # time.monotonic() of the last scan received
+        self._scan_stale = False    # latched stale state, for one-shot logging
+        self._braking = False       # latched hard-stop state, for one-shot logging
 
         # Subscribe on the PX4 node itself — it is already an rclpy Node, so a
         # single executor/spin covers both MAVROS telemetry and the lidar.
@@ -93,6 +100,7 @@ class OAController:
     # ── callbacks ────────────────────────────────────────────────────────
     def _scan_cb(self, msg):
         self.latest_scan = msg
+        self._scan_stamp = time.monotonic()
         self._scan_count += 1
 
     # ── lidar → world-frame obstacles ────────────────────────────────────
@@ -104,11 +112,18 @@ class OAController:
         A 2-D lidar has no elevation, so every return is placed at the drone's
         current altitude — the OA core then treats them as obstacles in the
         horizontal plane, which is what a planar lidar actually measures.
+
+        The raw scan has hundreds of beams; a single wall would become hundreds
+        of Obstacle3D points. The OA core's density / urgency model was tuned
+        for a handful of discrete obstacles, so the world points are voxel-grid
+        downsampled to at most one obstacle per `voxel_size` cell in XY.
         """
         obstacles = []
         cos_y, sin_y = math.cos(yaw), math.sin(yaw)
         rmin = scan.range_min
-        rmax = min(scan.range_max, self.max_range)
+        # A malformed scan can report range_max <= 0; fall back to max_range.
+        rmax = min(scan.range_max, self.max_range) if scan.range_max > 0 else self.max_range
+        seen_cells = set()
 
         for i, r in enumerate(scan.ranges):
             if i % self.beam_stride != 0:
@@ -127,6 +142,12 @@ class OAController:
             wy = drone_pos.y + bx * sin_y + by * cos_y
             wz = drone_pos.z
 
+            # Voxel-grid downsample: keep one obstacle per XY cell.
+            cell = (round(wx / self.voxel_size), round(wy / self.voxel_size))
+            if cell in seen_cells:
+                continue
+            seen_cells.add(cell)
+
             obstacles.append(Obstacle3D(wx, wy, wz, charge=300.0, radius=0.2))
 
         return obstacles
@@ -144,14 +165,38 @@ class OAController:
         pos = Vector3D(loc["x"], loc["y"], loc["z"])
         yaw = self.px4.get_current_yaw()
 
+        # ── stale-scan guard ──────────────────────────────────────────────
+        # OA is only safe while lidar data is fresh. If the scan stream stalls
+        # (bridge died, gz topic dropped) the last scan would otherwise be
+        # reused forever and the drone would fly "blind but confident" into
+        # whatever the OA core no longer sees. Instead, hold XY position (with
+        # altitude hold) until fresh scans return.
+        scan_age = (time.monotonic() - self._scan_stamp
+                    if self._scan_stamp is not None else None)
+        scan_fresh = scan_age is not None and scan_age <= self.scan_timeout
+
+        if not scan_fresh:
+            if not self._scan_stale:
+                self._scan_stale = True
+                why = ("no LaserScan received yet" if scan_age is None
+                       else f"last scan {scan_age:.1f}s old")
+                print(f"[OA] WARNING: lidar stale ({why}) — holding position")
+            # Hover: zero XY velocity, keep altitude hold so Z does not drift.
+            z_vel = max(-0.5, min(0.5, 0.3 * (self.target[2] - pos.z)))
+            self.px4.send_velocity_setpoint(0.0, 0.0, z_vel, 0.0)
+            return False
+
+        if self._scan_stale:
+            self._scan_stale = False
+            print("[OA] lidar recovered — resuming obstacle avoidance")
+
         # Feed real telemetry into the OA core. Robot3D integrates its own
         # model velocity from the avoidance force; position/yaw are corrected
         # from MAVROS each tick so the model never drifts from reality.
         self.robot.physics.position = pos.copy()
         self.robot.current_yaw = yaw
 
-        if self.latest_scan is not None:
-            self.robot.obstacles = self.scan_to_obstacles(self.latest_scan, pos, yaw)
+        self.robot.obstacles = self.scan_to_obstacles(self.latest_scan, pos, yaw)
 
         self.robot.update()
 
@@ -160,13 +205,34 @@ class OAController:
             return True
 
         v = self.robot.vel
-        
+
         # Keep horizontal (XY) avoidance, but replace Z with altitude hold/climb
         # Calculate Z velocity to maintain/reach target altitude
         z_error = self.target[2] - pos.z
         z_vel = 0.3 * z_error  # Simple proportional controller (0.3 m/s per meter error)
         z_vel = max(-0.5, min(0.5, z_vel))  # Clamp to ±0.5 m/s
-        
+
+        # ── hard-stop brake ───────────────────────────────────────────────
+        # Last-resort safety layer below the potential-field OA. The OA force
+        # is "soft" and can fail (local minima, force saturation, mis-tuning,
+        # thin obstacles thinned out by voxel downsampling). This check reads
+        # the RAW scan — nothing downsampled away — and if anything is within
+        # brake_distance it overrides OA and brakes XY to a hover. It does not
+        # back away; the drone holds until OA/stuck-escape steers it clear.
+        closest = min((r for r in self.latest_scan.ranges
+                       if math.isfinite(r) and r > self.latest_scan.range_min),
+                      default=float("inf"))
+        if closest < self.brake_distance:
+            if not self._braking:
+                self._braking = True
+                print(f"[OA] HARD STOP: obstacle {closest:.2f}m away "
+                      f"(< {self.brake_distance:.2f}m) — braking, OA overridden")
+            self.px4.send_velocity_setpoint(0.0, 0.0, z_vel, 0.0)
+            return False
+        if self._braking:
+            self._braking = False
+            print("[OA] hard-stop cleared — resuming obstacle avoidance")
+
         self.px4.send_velocity_setpoint(v.x, v.y, z_vel, self.robot.yaw_rate)
         return False
 
@@ -180,6 +246,12 @@ def parse_args(argv):
     p.add_argument("--lidar-topic", default=DEFAULT_LIDAR_TOPIC, help="LaserScan topic")
     p.add_argument("--beam-stride", type=int, default=1, help="Use every Nth lidar beam")
     p.add_argument("--max-range", type=float, default=MAX_DETECT_RANGE, help="Ignore returns past this range (m)")
+    p.add_argument("--voxel-size", type=float, default=0.4,
+                   help="Downsample lidar obstacles to one point per this XY cell size (m)")
+    p.add_argument("--scan-timeout", type=float, default=0.5,
+                   help="Hold position if no LaserScan arrives within this many seconds")
+    p.add_argument("--brake-distance", type=float, default=0.8,
+                   help="Hard-stop: brake to a hover if any lidar return is closer than this (m)")
     p.add_argument("--fcu-url", default=DEFAULT_FCU_URL, help="MAVROS FCU URL")
     p.add_argument("--boot-mavros", action="store_true",
                    help="Launch MAVROS via `ros2 launch mavros px4.launch` (otherwise assume it is already running)")
@@ -217,6 +289,9 @@ def main(argv=None):
         lidar_topic=args.lidar_topic,
         beam_stride=args.beam_stride,
         max_range=args.max_range,
+        voxel_size=args.voxel_size,
+        scan_timeout=args.scan_timeout,
+        brake_distance=args.brake_distance,
     )
 
     dt = 1.0 / LOOP_HZ

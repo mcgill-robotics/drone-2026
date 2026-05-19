@@ -41,26 +41,28 @@ class GazeboLidarBridge(Node):
         self.reader_thread.start()
 
     def _read_gazebo_stream(self):
-        """Read Gazebo topic output and parse LaserScan messages."""
+        """Read Gazebo topic output and parse LaserScan messages.
+
+        Each gz LaserScan is delimited by a top-level `header:` line. A scan
+        has hundreds of `ranges:` lines but the angle_*/range_* metadata
+        appears only once, before them — so a message must be parsed whole.
+        Splitting it into chunks drops that metadata and produces scans with
+        angle_increment=0 / range_max=0, which the OA core then reads as
+        "no obstacles". Publish strictly on the message boundary.
+        """
         buffer = []
-        
+
         for line in self.process.stdout:
             line = line.strip()
-            
+
             # Detect message start (header: at the top level, no indentation)
             if line == 'header:' and buffer:
-                # Previous message complete, publish it
+                # Previous message complete, publish it whole.
                 if self._has_ranges(buffer):
                     self._parse_and_publish(buffer)
                 buffer = [line]
             else:
                 buffer.append(line)
-            
-            # Publish when we accumulate enough ranges
-            if len([l for l in buffer if l.startswith('ranges:')]) > 50:
-                if self._has_ranges(buffer):
-                    self._parse_and_publish(buffer)
-                    buffer = []
     
     def _has_ranges(self, buffer):
         """Check if buffer has actual range data."""
