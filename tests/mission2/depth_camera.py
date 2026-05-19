@@ -18,7 +18,7 @@ try:
     from rclpy.qos import qos_profile_sensor_data
     from sensor_msgs.msg import Image
     from cv_bridge import CvBridge
-except ImportError:
+except Exception:
     np = None
     rclpy = None
     qos_profile_sensor_data = 10

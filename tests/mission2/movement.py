@@ -14,8 +14,12 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-# Import GPS coordinate conversion utilities from px4_setters
-from mission_controller.px4_setters import gps_to_local_offset, local_offset_to_gps
+TESTS_ROOT = REPO_ROOT / "tests"
+if str(TESTS_ROOT) not in sys.path:
+    sys.path.insert(0, str(TESTS_ROOT))
+
+# Import GPS coordinate conversion utilities from Mission 1 movement helpers
+from mission1.movement import gps_to_local_offset
 
 ARRIVAL_TOLERANCE_M = 0.5
 ALTITUDE_TOLERANCE_M = 0.75
