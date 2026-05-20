@@ -7,6 +7,7 @@ const depthCameraStream = document.getElementById('depth-camera-stream');
 const depthCameraOverlay = document.getElementById('depth-camera-overlay');
 const depthStreamStatus = document.getElementById('depth-stream-status');
 const depthDistanceOverlay = document.getElementById('depth-distance-overlay');
+const odOverlayCanvas = document.getElementById('od-overlay');
 const apiStatusEl = document.getElementById('api-status');
 const apiStatusText = apiStatusEl ? apiStatusEl.querySelector('.status-text') : null;
 const themeToggleBtn = document.getElementById('theme-toggle');
@@ -81,20 +82,28 @@ const API_CONFIG = {
 
 let sprayState = {
     isActive: false,
-    isPushbuttonMode: true,
-    channel: 3,
-    pwmOn: 1900,
-    pwmOff: 1500
+    isPushbuttonMode: true,  // Set to true for pushbutton (hold) behavior
+    channel: 3,              // PX4 servo channel (AUX1) for MAV_CMD_DO_SET_SERVO
+    pwmOn: 1900,             // PWM when ON (full on, range 1000-2000)
+    pwmOff: 1500             // PWM when OFF (neutral)
 };
 
 const WHEP_URLS = {
     depth: () => `http://${API_CONFIG.host}:8889/depth/whep`,
     rgb: () => `http://${API_CONFIG.host}:8889/rgb/whep`
 };
-
+// Object Detection shares the RGB stream — overlay is drawn client-side.
+const STREAM_FOR_VIEW = {
+    depth:   'depth',
+    rgb:     'rgb',
+    circles: 'rgb',
+};
 let currentDepthView = 'depth';
+let currentStreamKey = null;
 let activeWhepPc = null;
 let depthDistanceEventSource = null;
+let detectionSource = null;
+let detectionFrame = { width: 640, height: 480, target: null };
 
 async function activateSpray() {
     console.log('[SPRAY] activateSpray() called');
@@ -474,9 +483,8 @@ async function initWhepStream(videoElement, overlayElement, statusSetter, whepUr
 }
 
 function setDepthView(view) {
-    if (!WHEP_URLS[view] || !depthCameraStream) {
-        return;
-    }
+    const streamKey = STREAM_FOR_VIEW[view];
+    if (!streamKey || !depthCameraStream) return;
 
     currentDepthView = view;
 
@@ -487,14 +495,153 @@ function setDepthView(view) {
         btn.setAttribute('aria-pressed', active ? 'true' : 'false');
     });
 
-    initWhepStream(
-        depthCameraStream,
-        depthCameraOverlay,
-        setDepthStatus,
-        WHEP_URLS[view](),
-        view
-    );
+    if (currentStreamKey !== streamKey) {
+        initWhepStream(depthCameraStream, depthCameraOverlay, setDepthStatus, WHEP_URLS[streamKey](), streamKey);
+        currentStreamKey = streamKey;
+    }
+
+    if (view === 'circles') {
+        odOverlayCanvas.classList.add('active');
+        startDetectionStream();
+    } else {
+        odOverlayCanvas.classList.remove('active');
+        stopDetectionStream();
+        clearDetectionCanvas();
+    }
 }
+
+function startDetectionStream() {
+    if (detectionSource) return;
+    const url = `${API_CONFIG.baseUrl}/camera/detections`;
+    try {
+        detectionSource = new EventSource(url);
+        detectionSource.onmessage = (event) => {
+            try {
+                detectionFrame = JSON.parse(event.data);
+                drawDetections();
+            } catch (e) {
+                console.warn('[OD] Bad detection payload:', e);
+            }
+        };
+        detectionSource.onerror = () => {
+            console.warn('[OD] Detection stream error, will retry');
+            if (detectionSource) {
+                detectionSource.close();
+                detectionSource = null;
+            }
+            if (currentDepthView === 'circles') {
+                setTimeout(startDetectionStream, 1000);
+            }
+        };
+    } catch (e) {
+        console.warn('[OD] Failed to open detection stream:', e);
+    }
+}
+
+function stopDetectionStream() {
+    if (detectionSource) {
+        detectionSource.close();
+        detectionSource = null;
+    }
+}
+
+function clearDetectionCanvas() {
+    if (!odOverlayCanvas) return;
+    const ctx = odOverlayCanvas.getContext('2d');
+    ctx.clearRect(0, 0, odOverlayCanvas.width, odOverlayCanvas.height);
+}
+
+function drawDetections() {
+    if (!odOverlayCanvas || currentDepthView !== 'circles') return;
+
+    // Match canvas internal size to the video element's rendered size.
+    const rect = depthCameraStream.getBoundingClientRect();
+    const cw = Math.max(1, Math.round(rect.width));
+    const ch = Math.max(1, Math.round(rect.height));
+    if (odOverlayCanvas.width !== cw) odOverlayCanvas.width = cw;
+    if (odOverlayCanvas.height !== ch) odOverlayCanvas.height = ch;
+
+    const ctx = odOverlayCanvas.getContext('2d');
+    ctx.clearRect(0, 0, cw, ch);
+
+    const target = detectionFrame.target;
+
+    // Always show a status pill so we can tell the overlay is rendering even
+    // when the detector has not yet locked onto a target.
+    ctx.font = 'bold 12px sans-serif';
+    const badgeText = target ? 'OD · LOCKED' : 'OD · scanning…';
+    const badgeW = Math.ceil(ctx.measureText(badgeText).width) + 16;
+    const badgeH = 22;
+    ctx.fillStyle = target ? 'rgba(0, 180, 60, 0.9)' : 'rgba(0, 0, 0, 0.65)';
+    ctx.fillRect(8, 8, badgeW, badgeH);
+    ctx.fillStyle = '#ffffff';
+    ctx.fillText(badgeText, 16, 8 + 15);
+
+    if (!target) return;
+
+    const srcW = detectionFrame.width || 640;
+    const srcH = detectionFrame.height || 480;
+    // Video uses object-fit: contain — letterbox to preserve aspect ratio.
+    const scale = Math.min(cw / srcW, ch / srcH);
+    const offsetX = (cw - srcW * scale) / 2;
+    const offsetY = (ch - srcH * scale) / 2;
+
+    const wet = target.wetness === 'wet';
+    const boxColor = wet ? '#ff8000' : '#00cc44';
+
+    const bx = target.bbox.x * scale + offsetX;
+    const by = target.bbox.y * scale + offsetY;
+    const bw = target.bbox.w * scale;
+    const bh = target.bbox.h * scale;
+
+    ctx.lineWidth = 2;
+    ctx.strokeStyle = boxColor;
+    ctx.strokeRect(bx, by, bw, bh);
+
+    if (target.centroid) {
+        const cx = target.centroid.x * scale + offsetX;
+        const cy = target.centroid.y * scale + offsetY;
+        ctx.fillStyle = '#ff4040';
+        ctx.beginPath();
+        ctx.arc(cx, cy, 4, 0, Math.PI * 2);
+        ctx.fill();
+    }
+
+    const idTag = typeof target.id === 'number' ? `#${target.id} ` : '';
+    const wetLabel = target.wetness ? target.wetness.toUpperCase() : 'TARGET';
+    const labelLines = [`${idTag}${wetLabel}`];
+    if (typeof target.distance_m === 'number') {
+        const diam = typeof target.diameter_m === 'number'
+            ? ` · ~${Math.round(target.diameter_m * 100)} cm`
+            : '';
+        labelLines.push(`${target.distance_m.toFixed(2)} m${diam}`);
+    }
+    if (typeof target.lat === 'number' && typeof target.lon === 'number') {
+        labelLines.push(`${target.lat.toFixed(6)}, ${target.lon.toFixed(6)}`);
+    }
+
+    ctx.font = 'bold 14px sans-serif';
+    const padX = 6;
+    const padY = 4;
+    const lineH = 16;
+    const textW = Math.max(...labelLines.map(l => ctx.measureText(l).width));
+    const boxW = textW + padX * 2;
+    const boxH = lineH * labelLines.length + padY * 2;
+    let lx = bx;
+    let ly = by - boxH - 2;
+    if (ly < 0) ly = by + 2;
+
+    ctx.fillStyle = boxColor;
+    ctx.fillRect(lx, ly, boxW, boxH);
+    ctx.fillStyle = '#ffffff';
+    labelLines.forEach((line, i) => {
+        ctx.fillText(line, lx + padX, ly + padY + lineH * (i + 1) - 4);
+    });
+}
+
+window.addEventListener('resize', () => {
+    if (currentDepthView === 'circles') drawDetections();
+});
 
 document.querySelectorAll('.view-toggle-btn[data-view]').forEach(btn => {
     btn.addEventListener('click', () => {

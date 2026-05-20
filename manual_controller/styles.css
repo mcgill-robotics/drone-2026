@@ -321,7 +321,20 @@ body {
     object-fit: contain;
     display: block;
     background: var(--bg-camera);
+    position: relative;
+    z-index: 0;
 }
+
+.od-overlay {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    pointer-events: none;
+    z-index: 5;
+    display: none;
+}
+.od-overlay.active { display: block; }
 
 .stream-overlay {
     position: absolute;

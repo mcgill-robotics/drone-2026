@@ -39,6 +39,7 @@
                                 <div class="view-toggle" role="group" aria-label="Camera view">
                                     <button type="button" class="view-toggle-btn active" id="depth-view-depth" data-view="depth" aria-pressed="true">Depth</button>
                                     <button type="button" class="view-toggle-btn" id="depth-view-rgb" data-view="rgb" aria-pressed="false">RGB</button>
+                                    <button type="button" class="view-toggle-btn" id="depth-view-circles" data-view="circles" aria-pressed="false">Object Detection</button>
                                 </div>
                                 <span class="info-badge" id="depth-stream-status" data-state="connecting">Connecting…</span>
                             </div>
@@ -46,6 +47,7 @@
                         <div class="camera-container">
                             <div class="camera-feed live-feed">
                                 <video id="depth-camera-stream" class="live-camera-stream" autoplay muted playsinline></video>
+                                <canvas id="od-overlay" class="od-overlay"></canvas>
 
                                 <div class="stream-overlay" id="depth-camera-overlay">
                                     <div class="placeholder-text">Depth WebRTC Stream</div>
