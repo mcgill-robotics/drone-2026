@@ -18,7 +18,7 @@ import rclpy
 import threading
 import math
 from geometry_msgs.msg import PoseStamped, TwistStamped
-from mavros_msgs.srv import CommandBool, SetMode, CommandTOL, ParamGet, ParamPull, ParamSet
+from mavros_msgs.srv import CommandBool, SetMode, CommandTOL, CommandLong, ParamGet, ParamPull, ParamSet
 from mavros_msgs.msg import ParamValue
 
 
@@ -919,3 +919,101 @@ class PX4Setters:
             print(f"[PX4] Heartbeat worker error: {str(e)}")
             with self._stream_lock:
                 self._stream_running = False
+
+    def activate_spray(self, servo_channel=3, pwm_value=1900, timeout=10):
+        """
+        Activate spray pump via servo/actuator control.
+        
+        Sends a MAV_CMD_DO_SET_SERVO command to activate the spray pump motor
+        on the specified servo channel.
+        
+        Args:
+            servo_channel: Servo/PWM channel number (default 3, typically AUX1)
+            pwm_value: PWM value for motor (default 1900 = full on, range 1000-2000)
+            timeout: Service call timeout in seconds
+        
+        Returns:
+            True if command sent successfully, False otherwise
+        """
+        if not self.connected:
+            print("[PX4] Not connected to MAVROS, cannot activate spray")
+            return False
+
+        if not self.command_long_client.wait_for_service(timeout_sec=5):
+            print("[PX4] /cmd/command service unavailable")
+            return False
+
+        print(f"[PX4] Activating spray pump on channel {servo_channel} (PWM: {pwm_value})")
+        try:
+            req = CommandLong.Request()
+            req.command = 183  # MAV_CMD_DO_SET_SERVO
+            req.param1 = float(servo_channel)
+            req.param2 = float(pwm_value)
+            req.param3 = 0.0
+            req.param4 = 0.0
+            req.param5 = 0.0
+            req.param6 = 0.0
+            req.param7 = 0.0
+
+            future = self.command_long_client.call_async(req)
+            start = time.time()
+            while not future.done() and (time.time() - start) < timeout:
+                rclpy.spin_once(self, timeout_sec=0.1)
+                time.sleep(0.1)
+
+            if future.done() and future.result() and future.result().success:
+                print("[PX4] Spray pump activated successfully")
+                return True
+            else:
+                print("[PX4] Spray activation command rejected")
+                return False
+        except Exception as e:
+            print(f"[PX4] Spray activation failed: {str(e)}")
+            return False
+
+    def deactivate_spray(self, servo_channel=3, timeout=10):
+        """
+        Deactivate spray pump by setting servo to neutral position.
+        
+        Args:
+            servo_channel: Servo/PWM channel number (default 3)
+            timeout: Service call timeout in seconds
+        
+        Returns:
+            True if command sent successfully, False otherwise
+        """
+        if not self.connected:
+            print("[PX4] Not connected to MAVROS, cannot deactivate spray")
+            return False
+
+        if not self.command_long_client.wait_for_service(timeout_sec=5):
+            print("[PX4] /cmd/command service unavailable")
+            return False
+
+        print(f"[PX4] Deactivating spray pump on channel {servo_channel}")
+        try:
+            req = CommandLong.Request()
+            req.command = 183  # MAV_CMD_DO_SET_SERVO
+            req.param1 = float(servo_channel)
+            req.param2 = 1500.0  # PWM neutral position
+            req.param3 = 0.0
+            req.param4 = 0.0
+            req.param5 = 0.0
+            req.param6 = 0.0
+            req.param7 = 0.0
+
+            future = self.command_long_client.call_async(req)
+            start = time.time()
+            while not future.done() and (time.time() - start) < timeout:
+                rclpy.spin_once(self, timeout_sec=0.1)
+                time.sleep(0.1)
+
+            if future.done() and future.result() and future.result().success:
+                print("[PX4] Spray pump deactivated successfully")
+                return True
+            else:
+                print("[PX4] Spray deactivation command rejected")
+                return False
+        except Exception as e:
+            print(f"[PX4] Spray deactivation failed: {str(e)}")
+            return False
