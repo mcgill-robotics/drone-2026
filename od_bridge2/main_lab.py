@@ -5,6 +5,10 @@ import time
 import cv2
 import numpy as np
 
+# The temporal-confirmation state machine is pipeline-agnostic, so we reuse
+# main.py's class rather than duplicate it. Keeps both paths in lockstep.
+from main import TemporalLock
+
 
 # Known-good values. calibration.json overrides any of these; if it is missing
 # the tool must still work, so these are kept current with what actually works
@@ -18,8 +22,15 @@ DEFAULTS = {
     "tgt_b_lo": 110, "tgt_b_hi": 170,
     "kernel": 9,
     "min_area": 3000,
+    # circularity is only a fallback shape gate for contours too small to fit
+    # an ellipse; the main gate is ellipticity (tilt-invariant -- a circle at
+    # any viewing angle is still a clean ellipse).
     "circularity": 0.6,
-    "aspect": 0.65,
+    "ellipticity_min": 0.80,
+    "ellipticity_max": 1.25,
+    # aspect only rejects extreme slivers; 0.25 still allows a very steeply
+    # tilted (~75 deg, foreshortened) circular target.
+    "aspect": 0.25,
     "solidity": 0.9,
     # Per-frame adaptation: derive L_lo from the frame's own histogram so
     # the mask tracks ambient brightness instead of relying on fixed floors.
@@ -38,10 +49,21 @@ DEFAULTS = {
     "wet_L_lo": 80,  "wet_L_hi": 255,
     "wet_a_lo": 110, "wet_a_hi": 150,
     "wet_b_lo": 0,   "wet_b_hi": 115,
-    # Wet/dry classification. A dry target shows its vivid rose/magenta dye.
-    # We test if the pixels fall within these a/b bounds to count them as dry.
-    "dry_a_lo": 150, "dry_a_hi": 255,
-    "dry_b_lo": 110, "dry_b_hi": 170,
+    # Wet/dry classification. A dry pixel sits on the warm side of LAB
+    # neutral (a >= dry_a_lo), is not strongly blue (b >= dry_b_lo), and is at
+    # least about as red as it is yellow (a >= b - dry_a_minus_b). That last
+    # condition is what separates a real rose pixel from a warm-light-on-grey
+    # pixel that would otherwise look "dry" by raw a/b alone.
+    "dry_a_lo": 128,
+    "dry_b_lo": 115,
+    "dry_a_minus_b": 0,
+    # Minimum chroma (distance from neutral in a/b) for a pixel to count as
+    # carrying the dye. Without this a near-neutral pixel under a warm light
+    # passes the a/b box and gets called "dry" even though it is just grey.
+    # Set high enough to reject your live wet target (whose centre measures
+    # chroma ~6) and low enough to keep ordinary indoor dry rose targets
+    # (chroma 10+).
+    "dry_chroma_min": 8.0,
     "dry_hue_frac": 0.5,
 }
 
@@ -90,13 +112,25 @@ def _collect_candidates(contours, calib, depth_m, fx, verbose):
         if perim == 0:
             continue
         circ = 4 * np.pi * area / (perim * perim)
-        if circ < calib["circularity"]:
-            continue
         x, y, w, h = cv2.boundingRect(cnt)   # axis-aligned bbox, for drawing
-        # Aspect from the minimum-area (rotated) rectangle, so a target seen
-        # at an angle is not penalised the way an axis-aligned bbox would be.
+        # Aspect from the minimum-area (rotated) rectangle.
         (rw, rh) = cv2.minAreaRect(cnt)[1]
         aspect = min(rw, rh) / max(rw, rh) if max(rw, rh) else 0
+        # Shape gate: ellipse-fit quality, not raw circularity. A round target
+        # viewed at an angle foreshortens into an ELLIPSE -- still a clean
+        # ellipse, so ellipticity stays ~1.0 at any tilt where circularity
+        # would collapse. ellipticity = blob area / best-fit-ellipse area.
+        if len(cnt) >= 5:
+            (erw, erh) = cv2.fitEllipse(cnt)[1]
+            ell_area = np.pi * (erw / 2.0) * (erh / 2.0)
+            ellipticity = area / ell_area if ell_area else 0.0
+            if not (calib["ellipticity_min"] <= ellipticity
+                    <= calib["ellipticity_max"]):
+                continue
+        else:
+            ellipticity = 0.0
+            if circ < calib["circularity"]:
+                continue
         if aspect < calib["aspect"]:
             continue
         hull = cv2.convexHull(cnt)
@@ -118,10 +152,33 @@ def _collect_candidates(contours, calib, depth_m, fx, verbose):
             continue
         candidates.append({
             "cnt": cnt, "area": area, "circularity": circ, "aspect": aspect,
+            "ellipticity": ellipticity,
             "solidity": solidity, "bbox": (x, y, w, h), "centroid": (cx, cy),
             "distance": dist, "real_diameter": real_d,
         })
     return candidates
+
+
+def _is_plausible_target(lab, contour, calib):
+    """Veto candidates whose interior cannot plausibly be ANY kind of target.
+
+    A target paper is rose/magenta (dry dye -> positive a), blue (wet ->
+    low b), or near-neutral grey (washed-out wet -> a and b near 128).
+    A region dominantly green / yellow / strongly warm is not a target no
+    matter how circular -- this catches bogus shape matches on busy scenes
+    where the LAB mask alone is too permissive.
+    """
+    region = np.zeros(lab.shape[:2], np.uint8)
+    cv2.drawContours(region, [contour], -1, 255, thickness=cv2.FILLED)
+    pix = lab[region > 0]
+    if len(pix) == 0:
+        return False
+    a, b = pix[:, 1].astype(int), pix[:, 2].astype(int)
+    rose = (a >= 130) & (b <= 160)
+    blue = b <= 115
+    grey = (np.abs(a - 128) <= 8) & (np.abs(b - 128) <= 8)
+    plausible = rose | blue | grey
+    return float(plausible.mean()) >= calib.get("plausibility_min", 0.5)
 
 
 def _merge_candidates(primary, extra):
@@ -149,10 +206,19 @@ def _merge_candidates(primary, extra):
 def classify_wetness(lab, contour, calib):
     """Label a detected target 'wet' or 'dry'.
 
-    A dry target shows its vivid rose/magenta dye; a wet one has lost it and
-    gone blue or pale grey. We measure the fraction of the target's pixels
-    that still carry the dye in LAB space (checking the a/b bounds).
-    
+    A dry target shows its vivid rose/magenta dye; a wet one has either gone
+    blue or lost the dye and reads as grey/washed-out under whatever ambient
+    light it is sitting in.
+
+    A pixel counts as carrying the dye when ALL of:
+      - a >= dry_a_lo: it is on the warm/red side of LAB neutral.
+      - b >= dry_b_lo: it is NOT strongly blue (rules out the wet/blue case).
+      - a >= b - dry_a_minus_b: it is at least about as red as it is yellow.
+        A warm-light-on-grey pixel leans yellow so b ends up above a.
+      - chroma (a,b distance from neutral) >= dry_chroma_min: the pixel
+        actually carries enough colour to be a dye signal, not just lighting
+        noise on a near-grey paper.
+
     Returns (label, dry_fraction).
     """
     region = np.zeros(lab.shape[:2], np.uint8)
@@ -160,10 +226,13 @@ def classify_wetness(lab, contour, calib):
     pix = lab[region > 0]
     if len(pix) == 0:
         return "wet", 0.0
-    
-    a, b = pix[:, 1].astype(int), pix[:, 2].astype(int)
-    dry = ((a >= calib["dry_a_lo"]) & (a <= calib["dry_a_hi"]) &
-           (b >= calib["dry_b_lo"]) & (b <= calib["dry_b_hi"]))
+    a = pix[:, 1].astype(int)
+    b = pix[:, 2].astype(int)
+    chroma = np.sqrt((a - 128) ** 2 + (b - 128) ** 2)
+    dry = ((a >= calib["dry_a_lo"]) &
+           (b >= calib["dry_b_lo"]) &
+           (a >= b - calib["dry_a_minus_b"]) &
+           (chroma >= calib["dry_chroma_min"]))
     frac = float(np.count_nonzero(dry)) / len(pix)
     return ("dry" if frac >= calib["dry_hue_frac"] else "wet"), frac
 
@@ -221,36 +290,60 @@ def detect(frame, calib, verbose=False, depth_frame=None, fx=None,
     solid = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
     solid = cv2.morphologyEx(solid, cv2.MORPH_OPEN, kernel)
 
-    contours, _ = cv2.findContours(solid, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    # Collect every colour-mask contour that passes all filters.
+    # Mask-coverage sanity guard. When the LAB mask paints most of the frame
+    # (typical of a low-saturation webcam scene), any "contour" is meaningless
+    # -- skip the colour path and rely on the stricter edge fallback alone.
+    # The displayed mask is blanked so the debug view reflects this.
+    mask_coverage = float((solid > 0).mean())
+    if mask_coverage > calib.get("mask_coverage_max", 0.4):
+        if verbose:
+            print(f"LAB mask too permissive ({mask_coverage:.0%} of frame); "
+                  f"skipping colour candidates")
+        contours = []
+        solid = np.zeros_like(solid)
+        cv2.putText(solid, "MASK SUPPRESSED", (10, 30),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, 255, 2)
+    else:
+        contours, _ = cv2.findContours(solid, cv2.RETR_EXTERNAL,
+                                       cv2.CHAIN_APPROX_SIMPLE)
+    # Shape + depth filter, then a target-colour plausibility veto so a
+    # circular non-target (round bright object, head, etc.) is rejected.
     candidates = _collect_candidates(contours, calib, depth_m, fx, verbose)
+    candidates = [c for c in candidates if _is_plausible_target(lab, c["cnt"], calib)]
 
     # Always also run edge-based detection. The colour mask misses
     # low-saturation (grey) targets, and finding a colour false positive must
     # not stop us seeing a real grey target in the same frame. Edge detection
     # picks up more clutter, so edge candidates are held to tighter limits.
     gray = cv2.cvtColor(blurred, cv2.COLOR_BGR2GRAY)
-    edges = cv2.Canny(gray, 50, 150)
+    # Low Canny thresholds: a low-contrast target edge fades further at angle.
+    # (50,150) leaves gaps; (30,90) keeps the loop closed.
+    edges = cv2.Canny(gray, 30, 90)
     edges = cv2.dilate(edges, kernel)
     edges = cv2.morphologyEx(edges, cv2.MORPH_CLOSE, kernel)
-    sc, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    # RETR_LIST: the target's edge loop is often connected to card/background
+    # edges, so its outer boundary is a giant blob -- but the target interior
+    # is still an enclosed hole, which RETR_LIST returns as its own contour.
+    sc, _ = cv2.findContours(edges, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
     strict = dict(calib)
-    strict["circularity"] = max(calib["circularity"], 0.72)
+    strict["ellipticity_min"] = max(calib["ellipticity_min"], 0.85)
+    strict["ellipticity_max"] = min(calib["ellipticity_max"], 1.18)
     strict["solidity"] = max(calib["solidity"], 0.93)
     strict["min_area"] = max(calib["min_area"], 6000)
     edge_candidates = _collect_candidates(sc, strict, depth_m, fx, verbose)
+    edge_candidates = [c for c in edge_candidates
+                       if _is_plausible_target(lab, c["cnt"], calib)]
 
     # Merge: keep all colour candidates, add edge candidates that are not
-    # duplicates of one. Show both masks in the debug view.
+    # duplicates of one. The displayed mask is the COLOUR mask alone -- ORing
+    # the edges in floods the debug view with white on busy scenes.
     candidates = _merge_candidates(candidates, edge_candidates)
-    solid = cv2.bitwise_or(solid, edges)
     if verbose and edge_candidates:
         print(f"edge fallback contributed {len(edge_candidates)} candidate(s)")
 
-    # Pick the target. Circularity is the strongest cue for a round target, so
-    # rank on that rather than raw area (a background blob can be bigger).
-    # If we had a detection last frame, restrict to candidates near it first so
-    # the lock does not flicker between two valid-looking objects.
+    # Pick the target. Rank on how cleanly the blob matches an ellipse
+    # (tilt-invariant, unlike circularity), then on area, so a background blob
+    # cannot win just by being bigger.
     best_stats = None
     if candidates:
         pool = candidates
@@ -261,7 +354,8 @@ def detect(frame, calib, verbose=False, depth_frame=None, fx=None,
                      <= calib["track_radius"] ** 2]
             if gated:
                 pool = gated
-        best_stats = max(pool, key=lambda c: (c["circularity"], c["area"]))
+        best_stats = max(pool, key=lambda c: (-abs(c["ellipticity"] - 1.0),
+                                              c["area"]))
     best = best_stats["cnt"] if best_stats else None
 
     if best is not None:
@@ -277,7 +371,7 @@ def detect(frame, calib, verbose=False, depth_frame=None, fx=None,
             annotate_target(frame, best_stats)
         if verbose:
             print(f"detected: area={best_stats['area']:.0f} "
-                  f"circ={best_stats['circularity']:.2f} "
+                  f"ellipticity={best_stats['ellipticity']:.2f} "
                   f"aspect={best_stats['aspect']:.2f} "
                   f"solidity={best_stats['solidity']:.2f} "
                   f"centroid={best_stats.get('centroid')} "
@@ -338,17 +432,7 @@ def run_realsense(calib, verbose=False):
     fx = color_profile.get_intrinsics().fx
 
     align = rs.align(rs.stream.color)
-    # Temporal lock, expressed in TIME not frame counts so behaviour does not
-    # depend on the actual frame rate.
-    CONFIRM_SECONDS = 0.3   # a candidate must persist this long to be trusted
-    LOST_SECONDS = 0.3      # drop the lock after this long with no detection
-    base_radius = calib["track_radius"]
-
-    prev_centroid = None    # last frame's target position
-    streak_start = None     # time the current stable run began
-    last_seen = None        # time of the most recent detection
-    confirmed = False       # True once a candidate persisted CONFIRM_SECONDS
-    recent_motion = 0.0     # smoothed frame-to-frame centroid displacement (px)
+    lock = TemporalLock(calib["track_radius"])
     try:
         while True:
             frames = align.process(pipeline.wait_for_frames())
@@ -357,46 +441,17 @@ def run_realsense(calib, verbose=False):
             if not color_frame or not depth_frame:
                 continue
 
-            now = time.monotonic()
             frame = np.asanyarray(color_frame.get_data())
-            # Detect without drawing: a candidate is annotated only once it has
-            # persisted long enough, which rejects transient false positives
-            # (a passing hand, a hoodie, background flicker).
+            # Detect without drawing: the temporal lock decides when to draw,
+            # which rejects transient false positives (passing hand, hoodie,
+            # background flicker).
             annotated, mask, stats = detect(frame, calib, verbose=verbose,
                                             depth_frame=depth_frame, fx=fx,
-                                            prev_centroid=prev_centroid,
+                                            prev_centroid=lock.prev_centroid,
                                             draw=False)
 
             centroid = stats.get("centroid") if stats else None
-            if centroid:
-                if prev_centroid is None:
-                    stable, motion = True, 0.0
-                else:
-                    dx = centroid[0] - prev_centroid[0]
-                    dy = centroid[1] - prev_centroid[1]
-                    motion = (dx * dx + dy * dy) ** 0.5
-                    # The gate grows with recent motion, so on a moving drone
-                    # -- where the target legitimately shifts a lot per frame
-                    # -- a real target still counts as the same lock.
-                    gate = base_radius + 2.0 * recent_motion
-                    stable = motion <= gate
-                if stable:
-                    recent_motion = 0.7 * recent_motion + 0.3 * motion
-                    if streak_start is None:
-                        streak_start = now
-                else:
-                    streak_start = now      # treat as a fresh run
-                    recent_motion = 0.0
-                prev_centroid = centroid
-                last_seen = now
-                if now - streak_start >= CONFIRM_SECONDS:
-                    confirmed = True
-            else:
-                streak_start = None
-                if last_seen is not None and now - last_seen >= LOST_SECONDS:
-                    prev_centroid = None
-                    confirmed = False
-                    recent_motion = 0.0
+            confirmed = lock.update(centroid, time.monotonic())
 
             if confirmed and centroid:
                 annotate_target(annotated, stats)
@@ -461,14 +516,32 @@ def main():
               f"Try a different index with --cam <N> (USB cameras are usually 1 or 2). "
               f"Also check no other app is using it and permissions are granted.")
         sys.exit(1)
+    lock = TemporalLock(calib["track_radius"])
+    save_counter = 0
     while True:
         ret, cap_frame = cap.read()
         if not ret:
             break
-        annotated, mask, _ = detect(cap_frame, calib, verbose=verbose)
+        # Detect without drawing; the temporal lock decides when to annotate.
+        # This stops false positives flashing on screen every frame on a busy
+        # webcam feed where no real target is present.
+        annotated, mask, stats = detect(cap_frame, calib, verbose=verbose,
+                                        prev_centroid=lock.prev_centroid,
+                                        draw=False)
+        centroid = stats.get("centroid") if stats else None
+        if lock.update(centroid, time.monotonic()) and centroid:
+            annotate_target(annotated, stats)
         cv2.imshow('Live Dry Target Detection LAB', annotated)
         cv2.imshow('Mask LAB', mask)
-        if cv2.waitKey(1) & 0xFF == ord('q'):
+        key = cv2.waitKey(1) & 0xFF
+        # Press 's' to dump the current raw frame so we can measure the target
+        # LAB values offline -- much more useful than guessing thresholds.
+        if key == ord('s'):
+            save_counter += 1
+            path = f"webcam_capture_{save_counter}.png"
+            cv2.imwrite(path, cap_frame)
+            print(f"saved {path}")
+        if key == ord('q'):
             break
     cap.release()
     cv2.destroyAllWindows()

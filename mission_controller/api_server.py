@@ -144,7 +144,7 @@ def _open_depth_camera():
         raise RuntimeError('No depth camera source available')
 
 
-def _generate_depth_mjpeg_frames():
+def _generate_depth_mjpeg_frames(view='depth'):
     if cv2 is None:
         raise RuntimeError('OpenCV is required for depth camera streaming')
 
@@ -154,13 +154,18 @@ def _generate_depth_mjpeg_frames():
             if state['backend'] == 'realsense':
                 frames = state['pipeline'].wait_for_frames()
                 aligned = state['align'].process(frames)
-                depth_frame = aligned.get_depth_frame()
-                if not depth_frame:
-                    continue
 
-                depth_image = np.asanyarray(depth_frame.get_data())
-                depth_colormap = cv2.applyColorMap(cv2.convertScaleAbs(depth_image, alpha=0.03), cv2.COLORMAP_JET)
-                frame = depth_colormap
+                if view == 'rgb':
+                    color_frame = aligned.get_color_frame()
+                    if not color_frame:
+                        continue
+                    frame = np.asanyarray(color_frame.get_data())
+                else:
+                    depth_frame = aligned.get_depth_frame()
+                    if not depth_frame:
+                        continue
+                    depth_image = np.asanyarray(depth_frame.get_data())
+                    frame = cv2.applyColorMap(cv2.convertScaleAbs(depth_image, alpha=0.03), cv2.COLORMAP_JET)
             else:
                 ok, frame = state['capture'].read()
                 if not ok:
@@ -253,11 +258,24 @@ def depth_camera_stream():
     """Stream the live depth camera feed as MJPEG."""
     try:
         return Response(
-            stream_with_context(_generate_depth_mjpeg_frames()),
+            stream_with_context(_generate_depth_mjpeg_frames('depth')),
             mimetype='multipart/x-mixed-replace; boundary=frame'
         )
     except Exception as e:
         print(f'[API] Depth camera stream error: {e}')
+        return jsonify({'success': False, 'error': str(e)}), 503
+
+
+@app.route('/camera/rgb.mjpg', methods=['GET'])
+def rgb_camera_stream():
+    """Stream the live RGB color feed from the depth camera as MJPEG."""
+    try:
+        return Response(
+            stream_with_context(_generate_depth_mjpeg_frames('rgb')),
+            mimetype='multipart/x-mixed-replace; boundary=frame'
+        )
+    except Exception as e:
+        print(f'[API] RGB camera stream error: {e}')
         return jsonify({'success': False, 'error': str(e)}), 503
 
 

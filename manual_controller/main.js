@@ -71,7 +71,11 @@ let sprayState = {
     pwmOff: 1500            // PWM value when OFF (neutral)
 };
 
-const DEPTH_CAMERA_STREAM_URL = `${API_CONFIG.baseUrl}/camera/depth.mjpg`;
+const CAMERA_STREAM_URLS = {
+    depth: `${API_CONFIG.baseUrl}/camera/depth.mjpg`,
+    rgb: `${API_CONFIG.baseUrl}/camera/rgb.mjpg`,
+};
+let currentDepthView = 'depth';
 
 // ===== SPRAY CONTROL SYSTEM =====
 /**
@@ -315,13 +319,39 @@ function initDepthCameraStream() {
     depthCameraStream.onerror = () => {
         setDepthStatus('disconnected', 'Offline');
         depthCameraOverlay.style.display = 'flex';
-        depthCameraOverlay.querySelector('.placeholder-subtext').textContent = 'Unable to connect to depth feed';
-        console.warn('[DEPTH] Stream failed to load from', DEPTH_CAMERA_STREAM_URL);
+        depthCameraOverlay.querySelector('.placeholder-subtext').textContent = 'Unable to connect to camera feed';
+        console.warn('[DEPTH] Stream failed to load from', CAMERA_STREAM_URLS[currentDepthView]);
     };
 
-    depthCameraStream.src = DEPTH_CAMERA_STREAM_URL;
-    setDepthStatus('connecting', 'Connecting…');
+    setDepthView(currentDepthView);
 }
+
+function setDepthView(view) {
+    if (!CAMERA_STREAM_URLS[view]) return;
+    currentDepthView = view;
+
+    document.querySelectorAll('.view-toggle-btn[data-view]').forEach(btn => {
+        const active = btn.dataset.view === view;
+        btn.classList.toggle('active', active);
+        btn.setAttribute('aria-pressed', active ? 'true' : 'false');
+    });
+
+    if (depthCameraOverlay) {
+        depthCameraOverlay.style.display = 'flex';
+        const subtext = depthCameraOverlay.querySelector('.placeholder-subtext');
+        if (subtext) subtext.textContent = 'Waiting for Jetson feed…';
+    }
+    setDepthStatus('connecting', 'Connecting…');
+
+    if (depthCameraStream) {
+        // Cache-bust so the browser drops the previous MJPEG connection
+        depthCameraStream.src = `${CAMERA_STREAM_URLS[view]}?t=${Date.now()}`;
+    }
+}
+
+document.querySelectorAll('.view-toggle-btn[data-view]').forEach(btn => {
+    btn.addEventListener('click', () => setDepthView(btn.dataset.view));
+});
 
 // ===== TOAST NOTIFICATION SYSTEM =====
 function showToast(message, type = 'info') {
@@ -422,3 +452,25 @@ window.addEventListener('beforeunload', (e) => {
     }
 });
 
+
+// ===== MODE TABS =====
+(function initModeTabs() {
+    const tabs = document.querySelectorAll('.mode-tab');
+    const panels = document.querySelectorAll('.mode-panel');
+    tabs.forEach(tab => {
+        tab.addEventListener('click', () => {
+            const target = tab.dataset.tab;
+            tabs.forEach(t => {
+                const active = t === tab;
+                t.classList.toggle('active', active);
+                t.setAttribute('aria-selected', active ? 'true' : 'false');
+            });
+            panels.forEach(p => {
+                const active = p.id === `mode-${target}`;
+                p.classList.toggle('active', active);
+                if (active) p.removeAttribute('hidden');
+                else p.setAttribute('hidden', '');
+            });
+        });
+    });
+})();

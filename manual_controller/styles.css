@@ -555,3 +555,106 @@ kbd {
     .btn-shortcut { display: none; }
     .theme-toggle-label { display: none; }
 }
+
+/* ===== MODE TABS ===== */
+.mode-tabs {
+    display: flex;
+    gap: 0.25rem;
+    padding: 0.5rem 1.5rem 0;
+    background: var(--bg-page);
+    border-bottom: 1px solid var(--border-color);
+    flex-shrink: 0;
+}
+
+.mode-tab {
+    background: var(--bg-surface);
+    color: var(--text-secondary);
+    border: 1px solid var(--border-color);
+    border-bottom: none;
+    border-radius: var(--radius) var(--radius) 0 0;
+    padding: 0.6rem 1.2rem;
+    font-size: 0.95rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background var(--transition-speed), color var(--transition-speed);
+    margin-bottom: -1px;
+}
+
+.mode-tab:hover {
+    color: var(--text-primary);
+}
+
+.mode-tab.active {
+    background: var(--bg-elevated);
+    color: var(--text-primary);
+    border-color: var(--border-strong);
+    border-bottom: 1px solid var(--bg-elevated);
+}
+
+.mode-tab:focus-visible {
+    outline: none;
+    box-shadow: var(--focus-ring);
+}
+
+.mode-panel {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-height: 0;
+}
+
+.mode-panel[hidden] {
+    display: none;
+}
+
+.mode-placeholder {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    height: 100%;
+    color: var(--text-secondary);
+    gap: 0.5rem;
+}
+
+.mode-placeholder h2 {
+    color: var(--text-primary);
+}
+
+/* ===== VIEW TOGGLE (RGB / Depth) ===== */
+.view-toggle {
+    display: inline-flex;
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius);
+    overflow: hidden;
+    background: var(--bg-surface);
+}
+
+.view-toggle-btn {
+    background: transparent;
+    color: var(--text-secondary);
+    border: none;
+    padding: 0.35rem 0.8rem;
+    font-size: 0.85rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background var(--transition-speed), color var(--transition-speed);
+}
+
+.view-toggle-btn + .view-toggle-btn {
+    border-left: 1px solid var(--border-color);
+}
+
+.view-toggle-btn:hover {
+    color: var(--text-primary);
+}
+
+.view-toggle-btn.active {
+    background: var(--primary-color);
+    color: var(--text-on-color);
+}
+
+.view-toggle-btn:focus-visible {
+    outline: none;
+    box-shadow: var(--focus-ring);
+}

@@ -8,7 +8,9 @@
     "kernel": 9,
     "min_area": 3000,
     "circularity": 0.6,
-    "aspect": 0.65,
+    "ellipticity_min": 0.8,
+    "ellipticity_max": 1.25,
+    "aspect": 0.25,
     "solidity": 0.9,
     "adapt_floors": 1,
     "min_diameter_m": 0.03,
@@ -21,8 +23,8 @@
     "wet_b_lo": 0,
     "wet_b_hi": 115,
     "dry_a_lo": 128,
-    "dry_a_hi": 255,
-    "dry_b_lo": 118,
-    "dry_b_hi": 180,
+    "dry_b_lo": 115,
+    "dry_a_minus_b": 0,
+    "dry_chroma_min": 8.0,
     "dry_hue_frac": 0.5
 }

@@ -25,6 +25,14 @@
             </div>
         </header>
 
+        <!-- Mode Tabs -->
+        <nav class="mode-tabs" role="tablist" aria-label="Drone modes">
+            <button class="mode-tab active" role="tab" aria-selected="true" aria-controls="mode-mission-one" id="tab-mission-one" data-tab="mission-one">Mission One</button>
+            <button class="mode-tab" role="tab" aria-selected="false" aria-controls="mode-mission-two" id="tab-mission-two" data-tab="mission-two">Mission Two</button>
+        </nav>
+
+        <!-- Mission One Mode -->
+        <div class="mode-panel active" id="mode-mission-one" role="tabpanel" aria-labelledby="tab-mission-one">
         <!-- Main Content -->
         <main class="main-content">
             <div class="screens-grid">
@@ -33,6 +41,10 @@
                     <div class="screen-header">
                         <h2>Depth Camera</h2>
                         <div class="screen-info">
+                            <div class="view-toggle" role="group" aria-label="Camera view">
+                                <button type="button" class="view-toggle-btn active" id="depth-view-depth" data-view="depth" aria-pressed="true">Depth</button>
+                                <button type="button" class="view-toggle-btn" id="depth-view-rgb" data-view="rgb" aria-pressed="false">RGB</button>
+                            </div>
                             <span class="info-badge" id="depth-stream-status" data-state="connecting">Connecting…</span>
                         </div>
                     </div>
@@ -97,6 +109,17 @@
                 </button>
             </div>
         </footer>
+        </div>
+
+        <!-- Mission Two Mode -->
+        <div class="mode-panel" id="mode-mission-two" role="tabpanel" aria-labelledby="tab-mission-two" hidden>
+            <main class="main-content">
+                <div class="mode-placeholder">
+                    <h2>Mission Two</h2>
+                    <p>Coming soon.</p>
+                </div>
+            </main>
+        </div>
 
         <!-- Toast Notifications -->
         <div id="toast-container" class="toast-container" aria-live="polite"></div>
