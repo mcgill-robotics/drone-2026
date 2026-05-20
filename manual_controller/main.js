@@ -55,7 +55,7 @@ function setDepthStatus(state, label) {
 
 // ===== API CONFIGURATION =====
 const API_CONFIG = {
-    host: 'localhost',
+    host: window.location.hostname || 'localhost',
     port: 5000,
     get baseUrl() {
         return `http://${this.host}:${this.port}`;
