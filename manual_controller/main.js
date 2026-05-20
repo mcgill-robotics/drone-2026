@@ -71,11 +71,12 @@ let sprayState = {
     pwmOff: 1500            // PWM value when OFF (neutral)
 };
 
-const CAMERA_STREAM_URLS = {
-    depth: `${API_CONFIG.baseUrl}/camera/depth.mjpg`,
-    rgb: `${API_CONFIG.baseUrl}/camera/rgb.mjpg`,
+const WHEP_URLS = {
+    depth: () => `http://${API_CONFIG.host}:8889/depth/whep`,
+    rgb:   () => `http://${API_CONFIG.host}:8889/rgb/whep`,
 };
 let currentDepthView = 'depth';
+let activeWhepPc = null;
 
 // ===== SPRAY CONTROL SYSTEM =====
 /**
@@ -306,28 +307,88 @@ function handleSmallPayload() {
         });
 }
 
-function initDepthCameraStream() {
-    if (!depthCameraStream) {
-        return;
+async function initWhepStream(videoElement, overlayElement, statusSetter, whepUrl, label) {
+    if (!videoElement) return;
+
+    if (activeWhepPc) {
+        activeWhepPc.close();
+        activeWhepPc = null;
     }
 
-    depthCameraStream.onload = () => {
-        setDepthStatus('connected', 'Live');
-        depthCameraOverlay.style.display = 'none';
-    };
+    statusSetter('connecting', 'Connecting…');
+    if (overlayElement) {
+        overlayElement.style.display = 'flex';
+        const subtext = overlayElement.querySelector('.placeholder-subtext');
+        if (subtext) subtext.textContent = 'Connecting to MediaMTX…';
+    }
 
-    depthCameraStream.onerror = () => {
-        setDepthStatus('disconnected', 'Offline');
-        depthCameraOverlay.style.display = 'flex';
-        depthCameraOverlay.querySelector('.placeholder-subtext').textContent = 'Unable to connect to camera feed';
-        console.warn('[DEPTH] Stream failed to load from', CAMERA_STREAM_URLS[currentDepthView]);
-    };
+    try {
+        const pc = new RTCPeerConnection();
+        activeWhepPc = pc;
 
-    setDepthView(currentDepthView);
+        pc.ontrack = (event) => {
+            videoElement.srcObject = event.streams[0];
+            videoElement.play().catch(() => {});
+            videoElement.onplaying = () => {
+                statusSetter('connected', 'Live');
+                if (overlayElement) overlayElement.style.display = 'none';
+                videoElement.onplaying = null;
+            };
+        };
+
+        pc.onconnectionstatechange = () => {
+            if (pc.connectionState === 'failed' || pc.connectionState === 'disconnected') {
+                statusSetter('disconnected', 'Offline');
+                if (overlayElement) {
+                    overlayElement.style.display = 'flex';
+                    const subtext = overlayElement.querySelector('.placeholder-subtext');
+                    if (subtext) subtext.textContent = `Lost ${label} stream`;
+                }
+                if (pc === activeWhepPc) {
+                    setTimeout(() => initWhepStream(videoElement, overlayElement, statusSetter, whepUrl, label), 1000);
+                }
+            }
+        };
+
+        pc.addTransceiver('video', { direction: 'recvonly' });
+
+        const offer = await pc.createOffer();
+        await pc.setLocalDescription(offer);
+
+        await new Promise(resolve => {
+            if (pc.iceGatheringState === 'complete') { resolve(); return; }
+            const timeout = setTimeout(resolve, 1000);
+            pc.onicegatheringstatechange = () => {
+                if (pc.iceGatheringState === 'complete') { clearTimeout(timeout); resolve(); }
+            };
+        });
+
+        const response = await fetch(whepUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/sdp' },
+            body: pc.localDescription.sdp,
+        });
+
+        if (!response.ok) throw new Error(`WHEP ${response.status}`);
+
+        const sdpAnswer = await response.text();
+        await pc.setRemoteDescription({ type: 'answer', sdp: sdpAnswer });
+
+    } catch (err) {
+        console.warn(`[${label.toUpperCase()}] WHEP failed:`, err.message);
+        statusSetter('disconnected', 'Offline');
+        if (overlayElement) {
+            overlayElement.style.display = 'flex';
+            const subtext = overlayElement.querySelector('.placeholder-subtext');
+            if (subtext) subtext.textContent = `Unable to connect to ${label} stream`;
+        }
+        setTimeout(() => initWhepStream(videoElement, overlayElement, statusSetter, whepUrl, label), 1000);
+    }
 }
 
 function setDepthView(view) {
-    if (!CAMERA_STREAM_URLS[view]) return;
+    if (!WHEP_URLS[view] || !depthCameraStream) return;
+
     currentDepthView = view;
 
     document.querySelectorAll('.view-toggle-btn[data-view]').forEach(btn => {
@@ -336,17 +397,7 @@ function setDepthView(view) {
         btn.setAttribute('aria-pressed', active ? 'true' : 'false');
     });
 
-    if (depthCameraOverlay) {
-        depthCameraOverlay.style.display = 'flex';
-        const subtext = depthCameraOverlay.querySelector('.placeholder-subtext');
-        if (subtext) subtext.textContent = 'Waiting for Jetson feed…';
-    }
-    setDepthStatus('connecting', 'Connecting…');
-
-    if (depthCameraStream) {
-        // Cache-bust so the browser drops the previous MJPEG connection
-        depthCameraStream.src = `${CAMERA_STREAM_URLS[view]}?t=${Date.now()}`;
-    }
+    initWhepStream(depthCameraStream, depthCameraOverlay, setDepthStatus, WHEP_URLS[view](), view);
 }
 
 document.querySelectorAll('.view-toggle-btn[data-view]').forEach(btn => {
@@ -391,7 +442,7 @@ document.addEventListener('DOMContentLoaded', () => {
     console.log('Drone Control Panel initialized');
     console.log('[SPRAY] Using pushbutton mode (hold to spray)');
     showToast('System ready for operation', 'success');
-    initDepthCameraStream();
+    setDepthView(currentDepthView);
     
     setApiStatus('connecting', 'Connecting…');
     const refreshApiStatus = (notifyOnFail) => {

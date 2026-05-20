@@ -1,6 +1,9 @@
 
 ardupilot/
 /ardupilot
+
+# MediaMTX binary (arm64 — download separately, see README)
+/mediamtx
 # pycache files
 __pycache__/
 **/__pycache__/

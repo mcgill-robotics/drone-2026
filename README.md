@@ -38,12 +38,16 @@ The objective of this task is to extinguish small indoor and outdoor blazes whil
 - Pilot Requirements: All pilots must hold an Advanced RPAS Pilot Certificate. 
 
 ## Camera Feed
-The container images now include MediaMTX and FFmpeg for RTSP camera streaming. MediaMTX listens on the default RTSP port `8554`, so the camera viewer URL is still `rtsp://<host>:8554/live`.
+The Intel RealSense depth camera is streamed over WebRTC via MediaMTX. The `api_server.py` starts MediaMTX and the ffmpeg publishers automatically — no manual setup needed at runtime.
 
-For a USB webcam on Linux, you can publish a feed with:
+### First-time setup: download MediaMTX
+
+The MediaMTX binary is not committed to this repo. Download the arm64 build and place it in the repo root:
 
 ```sh
-ffmpeg -f v4l2 -i /dev/video0 -c:v libx264 -pix_fmt yuv420p -preset ultrafast -f rtsp rtsp://localhost:8554/live
+wget https://github.com/bluenviron/mediamtx/releases/download/v1.18.2/mediamtx_v1.18.2_linux_arm64v8.tar.gz
+tar -xzf mediamtx_v1.18.2_linux_arm64v8.tar.gz mediamtx
+rm mediamtx_v1.18.2_linux_arm64v8.tar.gz
 ```
 
-Run `mediamtx` in the same environment to accept the stream.
+The included `mediamtx.yml` configures the `depth` and `rgb` stream paths. `api_server.py` picks it up automatically on startup.

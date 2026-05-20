@@ -39,7 +39,7 @@
                 <!-- Depth Camera Screen -->
                 <section class="screen" id="depth-camera">
                     <div class="screen-header">
-                        <h2>Depth Camera</h2>
+                        <h2>Intel Depth Camera</h2>
                         <div class="screen-info">
                             <div class="view-toggle" role="group" aria-label="Camera view">
                                 <button type="button" class="view-toggle-btn active" id="depth-view-depth" data-view="depth" aria-pressed="true">Depth</button>
@@ -50,38 +50,37 @@
                     </div>
                     <div class="camera-container">
                         <div class="camera-feed live-feed">
-                            <img
+                            <video
                                 id="depth-camera-stream"
                                 class="live-camera-stream"
-                                src=""
-                                alt="Depth camera stream"
-                            >
+                                autoplay
+                                muted
+                                playsinline
+                            ></video>
                             <div class="stream-overlay" id="depth-camera-overlay">
-                                <div class="placeholder-text">Depth Camera Stream</div>
-                                <div class="placeholder-subtext">Waiting for Jetson feed…</div>
+                                <div class="placeholder-text">Depth WebRTC Stream</div>
+                                <div class="placeholder-subtext">Waiting for MediaMTX…</div>
                             </div>
                         </div>
                     </div>
                 </section>
-
-                <!-- RTSP Camera Screen -->
-                <section class="screen" id="rtsp-camera">
-                    <div class="screen-header">
-                        <h2>RTSP Camera</h2>
-                        <div class="screen-info">
-                            <span class="info-badge">1920×1080 · 30fps</span>
-                        </div>
-                    </div>
-                    <div class="camera-container">
-                        <div class="camera-feed">
-                            <div class="placeholder-image rtsp-placeholder">
-                                <div class="placeholder-text">RTSP Camera Stream</div>
-                                <div class="placeholder-subtext">Waiting for connection…</div>
-                            </div>
-                        </div>
-                    </div>
-                </section>
-            </div>
+                 <!-- RTSP Camera Screen -->
+                 <section class="screen" id="rtsp-camera">
+                     <div class="screen-header">
+                         <h2>RTSP Camera</h2>
+                         <div class="screen-info">
+                             <span class="info-badge">1920×1080 · 30fps</span>
+                         </div>
+                     </div>
+                     <div class="camera-container">
+                         <div class="camera-feed">
+                             <div class="placeholder-image rtsp-placeholder">
+                                 <div class="placeholder-text">RTSP Camera Stream</div>
+                                 <div class="placeholder-subtext">Waiting for connection…</div>
+                             </div>
+                         </div>
+                     </div>
+                 </section>            </div>
         </main>
 
         <!-- Control Panel -->

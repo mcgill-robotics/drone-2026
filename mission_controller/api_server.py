@@ -17,6 +17,8 @@ import sys
 import argparse
 import time
 import threading
+import shutil
+import subprocess
 from flask import Flask, request, jsonify, Response, stream_with_context
 from flask_cors import CORS
 
@@ -52,13 +54,202 @@ CORS(app)  # Enable CORS for all routes
 # Global state
 px4_interface = None
 px4_thread = None
-depth_camera_lock = threading.Lock()
+mediamtx_process = None
+stream_publishers = {
+    'depth': None,
+    'rgb': None,
+}
+depth_camera_lock = threading.RLock()
 depth_camera_state = {
     'backend': None,
     'pipeline': None,
     'align': None,
     'capture': None,
 }
+
+
+def _capture_camera_frame(view='depth'):
+    if cv2 is None:
+        raise RuntimeError('OpenCV is required for camera streaming')
+
+    with depth_camera_lock:
+        state = _open_depth_camera()
+
+        if state['backend'] == 'realsense':
+            frames = state['pipeline'].wait_for_frames()
+            aligned = state['align'].process(frames)
+
+            if view == 'rgb':
+                color_frame = aligned.get_color_frame()
+                if not color_frame:
+                    return None
+                return np.asanyarray(color_frame.get_data())
+
+            depth_frame = aligned.get_depth_frame()
+            if not depth_frame:
+                return None
+
+            depth_image = np.asanyarray(depth_frame.get_data())
+            scaled = cv2.convertScaleAbs(depth_image, alpha=0.03)
+            return cv2.applyColorMap(cv2.bitwise_not(scaled), cv2.COLORMAP_JET)
+
+        ok, frame = state['capture'].read()
+        if not ok:
+            return None
+
+        return frame
+
+
+def _run_mediamtx():
+    global mediamtx_process
+
+    if mediamtx_process is not None and mediamtx_process.poll() is None:
+        return True
+
+    mediamtx_binary = shutil.which('mediamtx') or (
+        os.path.join(_REPO_ROOT, 'mediamtx')
+        if os.path.isfile(os.path.join(_REPO_ROOT, 'mediamtx')) else None
+    )
+    if mediamtx_binary is None:
+        print('[API] MediaMTX binary not found on PATH or repo root; WebRTC camera views will not be available')
+        return False
+
+    mediamtx_config = os.path.join(_REPO_ROOT, 'mediamtx.yml')
+    mediamtx_cmd = [mediamtx_binary]
+    if os.path.isfile(mediamtx_config):
+        mediamtx_cmd.append(mediamtx_config)
+
+    try:
+        mediamtx_process = subprocess.Popen(
+            mediamtx_cmd,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        time.sleep(1.0)
+
+        if mediamtx_process.poll() is None:
+            print('[API] MediaMTX started on the default RTSP/WebRTC ports')
+            return True
+
+        stderr = mediamtx_process.stderr.read() if mediamtx_process.stderr else ''
+        print(f'[API] MediaMTX failed to start: {stderr.strip()}')
+        mediamtx_process = None
+        return False
+    except Exception as e:
+        print(f'[API] Failed to launch MediaMTX: {e}')
+        mediamtx_process = None
+        return False
+
+
+def _start_stream_publisher(view_name):
+    existing = stream_publishers.get(view_name)
+    if existing is not None and existing.poll() is None:
+        return True
+
+    ffmpeg_binary = shutil.which('ffmpeg')
+    if ffmpeg_binary is None:
+        print(f'[API] ffmpeg not found; cannot publish {view_name} stream to MediaMTX')
+        return False
+
+    stream_url = f'rtmp://127.0.0.1:1935/{view_name}'
+    cmd = [
+        ffmpeg_binary,
+        '-loglevel', 'error',
+        '-f', 'rawvideo',
+        '-pix_fmt', 'bgr24',
+        '-s', '640x480',
+        '-r', '30',
+        '-i', 'pipe:0',
+        '-an',
+        '-c:v', 'libx264',
+        '-preset', 'ultrafast',
+        '-tune', 'zerolatency',
+        '-g', '1',
+        '-sc_threshold', '0',
+        '-pix_fmt', 'yuv420p',
+        '-f', 'flv',
+        stream_url,
+    ]
+
+    try:
+        proc = subprocess.Popen(
+            cmd,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+        )
+        stream_publishers[view_name] = proc
+        print(f'[API] Publishing {view_name} camera stream via RTMP to MediaMTX path /{view_name}')
+
+        def _publisher_loop():
+            try:
+                while proc.poll() is None:
+                    frame = _capture_camera_frame(view_name)
+                    if frame is None:
+                        time.sleep(0.05)
+                        continue
+
+                    if frame.shape[:2] != (480, 640):
+                        frame = cv2.resize(frame, (640, 480))
+
+                    if proc.stdin is None:
+                        break
+
+                    proc.stdin.write(frame.tobytes())
+                    proc.stdin.flush()
+            except BrokenPipeError:
+                pass
+            except Exception as e:
+                print(f'[API] {view_name} publisher stopped: {e}')
+            finally:
+                if proc.stdin is not None:
+                    try:
+                        proc.stdin.close()
+                    except Exception:
+                        pass
+
+        thread = threading.Thread(target=_publisher_loop, daemon=True)
+        thread.start()
+        return True
+    except Exception as e:
+        print(f'[API] Failed to start {view_name} publisher: {e}')
+        return False
+
+
+def _start_camera_streams():
+    _run_mediamtx()
+    _start_stream_publisher('depth')
+    _start_stream_publisher('rgb')
+
+
+def _stop_camera_streams():
+    for view_name, proc in list(stream_publishers.items()):
+        if proc is None:
+            continue
+        try:
+            if proc.poll() is None:
+                proc.terminate()
+                proc.wait(timeout=3)
+        except Exception:
+            try:
+                proc.kill()
+            except Exception:
+                pass
+        stream_publishers[view_name] = None
+
+    global mediamtx_process
+    if mediamtx_process is not None:
+        try:
+            if mediamtx_process.poll() is None:
+                mediamtx_process.terminate()
+                mediamtx_process.wait(timeout=3)
+        except Exception:
+            try:
+                mediamtx_process.kill()
+            except Exception:
+                pass
+        mediamtx_process = None
 
 
 
@@ -148,28 +339,11 @@ def _generate_depth_mjpeg_frames(view='depth'):
     if cv2 is None:
         raise RuntimeError('OpenCV is required for depth camera streaming')
 
-    state = _open_depth_camera()
     try:
         while True:
-            if state['backend'] == 'realsense':
-                frames = state['pipeline'].wait_for_frames()
-                aligned = state['align'].process(frames)
-
-                if view == 'rgb':
-                    color_frame = aligned.get_color_frame()
-                    if not color_frame:
-                        continue
-                    frame = np.asanyarray(color_frame.get_data())
-                else:
-                    depth_frame = aligned.get_depth_frame()
-                    if not depth_frame:
-                        continue
-                    depth_image = np.asanyarray(depth_frame.get_data())
-                    frame = cv2.applyColorMap(cv2.convertScaleAbs(depth_image, alpha=0.03), cv2.COLORMAP_JET)
-            else:
-                ok, frame = state['capture'].read()
-                if not ok:
-                    continue
+            frame = _capture_camera_frame(view)
+            if frame is None:
+                continue
 
             ok, buffer = cv2.imencode('.jpg', frame)
             if not ok:
@@ -448,12 +622,12 @@ def main():
         print("[API] Booting PX4...")
         boot_px4(fcu_url=fcu_url, namespace=args.namespace)
         time.sleep(2)  # Wait for boot
-    print("TESTTT")
     # Initialize PX4 interface
-    print("fcu is", fcu_url)
     if not init_px4_interface(fcu_url, args.namespace):
         print("[API] Failed to initialize PX4 interface")
         sys.exit(1)
+
+    _start_camera_streams()
     
     # Start ROS spin thread
     global px4_thread
@@ -479,6 +653,7 @@ def main():
     except KeyboardInterrupt:
         print("\n[API] Shutting down...")
     finally:
+        _stop_camera_streams()
         stop_px4()
 
 
