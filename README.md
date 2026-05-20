@@ -36,3 +36,14 @@ The objective of this task is to extinguish small indoor and outdoor blazes whil
 - Altitude: Flights are limited to a maximum altitude of 400ft. 
 - Flight Crew: Limited to a maximum of five members on the flight line. 
 - Pilot Requirements: All pilots must hold an Advanced RPAS Pilot Certificate. 
+
+## Camera Feed
+The container images now include MediaMTX and FFmpeg for RTSP camera streaming. MediaMTX listens on the default RTSP port `8554`, so the camera viewer URL is still `rtsp://<host>:8554/live`.
+
+For a USB webcam on Linux, you can publish a feed with:
+
+```sh
+ffmpeg -f v4l2 -i /dev/video0 -c:v libx264 -pix_fmt yuv420p -preset ultrafast -f rtsp rtsp://localhost:8554/live
+```
+
+Run `mediamtx` in the same environment to accept the stream.

@@ -30,9 +30,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     cmake \
     python3-pip \
+    ffmpeg \
     # Cleanup to reduce image size
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
+
+# Install MediaMTX for RTSP camera streaming.
+COPY --from=bluenviron/mediamtx:1 /mediamtx /usr/local/bin/mediamtx
+COPY --from=bluenviron/mediamtx:1 /mediamtx.yml /mediamtx.yml
 
 # --------------------------------------------------------------------------------
 # 3. Environment Configuration
