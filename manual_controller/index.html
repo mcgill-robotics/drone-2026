@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Drone Control Panel</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <div class="container">
+        <!-- Header -->
+        <header class="header">
+            <div class="header-content">
+                <h1>🚁 Drone Control Panel</h1>
+                <div class="status-indicator">
+                    <span class="status-dot"></span>
+                    <span class="status-text">System Ready</span>
+                </div>
+            </div>
+        </header>
+
+        <!-- Main Content -->
+        <main class="main-content">
+            <!-- Tabs Navigation -->
+            <nav class="tabs-nav">
+                <button class="tab-button active" data-tab="depth-camera">
+                    <span class="tab-icon">📊</span>
+                    <span class="tab-label">Depth Camera</span>
+                </button>
+                <button class="tab-button" data-tab="rtsp-camera">
+                    <span class="tab-icon">📹</span>
+                    <span class="tab-label">RTSP Camera</span>
+                </button>
+                <button class="tab-button" data-tab="google-maps">
+                    <span class="tab-icon">🗺️</span>
+                    <span class="tab-label">Mission Map</span>
+                </button>
+            </nav>
+
+            <!-- Tab Content -->
+            <div class="tabs-container">
+                <!-- Depth Camera Screen -->
+                <div class="tab-content active" id="depth-camera">
+                    <div class="screen-header">
+                        <h2>Depth Camera Feed</h2>
+                        <div class="screen-info">
+                            <span class="info-badge">Resolution: 640x480</span>
+                            <span class="info-badge">FPS: 30</span>
+                        </div>
+                    </div>
+                    <div class="camera-container">
+                        <div class="camera-feed">
+                            <div class="placeholder-image depth-placeholder">
+                                <div class="placeholder-text">Depth Camera Stream</div>
+                                <div class="placeholder-subtext">Waiting for connection...</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- RTSP Camera Screen -->
+                <div class="tab-content" id="rtsp-camera">
+                    <div class="screen-header">
+                        <h2>RTSP Camera Feed</h2>
+                        <div class="screen-info">
+                            <span class="info-badge">Resolution: 1920x1080</span>
+                            <span class="info-badge">FPS: 30</span>
+                        </div>
+                    </div>
+                    <div class="camera-container">
+                        <div class="camera-feed">
+                            <div class="placeholder-image rtsp-placeholder">
+                                <div class="placeholder-text">RTSP Camera Stream</div>
+                                <div class="placeholder-subtext">Waiting for connection...</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Google Maps Screen -->
+                <div class="tab-content" id="google-maps">
+                    <div class="screen-header">
+                        <h2>Mission Planning Map</h2>
+                        <div class="screen-info">
+                            <span class="info-badge" id="target-count">Targets: 0</span>
+                            <button class="add-target-btn" id="add-target-btn">+ Add Target</button>
+                        </div>
+                    </div>
+                    <div class="map-container">
+                        <div class="placeholder-image maps-placeholder">
+                            <div class="placeholder-text">Google Maps Integration</div>
+                            <div class="placeholder-subtext">Click on map to add targets</div>
+                            <div class="targets-list" id="targets-list"></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </main>
+
+        <!-- Control Panel -->
+        <footer class="control-panel">
+            <div class="control-buttons">
+                <button class="control-btn screenshot-btn" id="screenshot-btn">
+                    <span class="btn-icon">📸</span>
+                    <span class="btn-text">Screenshot</span>
+                </button>
+                <button class="control-btn release-payload-btn" id="release-payload-btn">
+                    <span class="btn-icon">📦</span>
+                    <span class="btn-text">Release Payload</span>
+                </button>
+                <button class="control-btn spray-water-btn" id="spray-water-btn">
+                    <span class="btn-icon">💧</span>
+                    <span class="btn-text">Spray Water</span>
+                </button>
+            </div>
+        </footer>
+
+        <!-- Toast Notifications -->
+        <div id="toast-container" class="toast-container"></div>
+    </div>
+
+    <script src="main.js"></script>
+</body>
+</html>
