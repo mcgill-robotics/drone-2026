@@ -15,6 +15,7 @@ The server will:
 import os
 import sys
 import argparse
+import json
 import time
 import threading
 import shutil
@@ -45,6 +46,13 @@ sys.path.insert(0, _REPO_ROOT)
 import rclpy
 from mission_controller.px4_interface import init_px4, boot_px4, stop_px4
 
+try:
+    from od_bridge2.mission1_od import detect as od_detect, load_calibration as od_load_calibration
+except Exception as _e:
+    od_detect = None
+    od_load_calibration = None
+    print(f'[API] Object detection module unavailable: {_e}')
+
 # ============================================================================
 # Flask app setup
 # ============================================================================
@@ -67,37 +75,203 @@ depth_camera_state = {
     'capture': None,
 }
 
+# Shared frame buffer fed by a single capture thread. Publishers and detection
+# consumers read from here so the RealSense pipeline is only driven by one
+# thread (multi-threaded wait_for_frames calls starve each other).
+frame_buffer_lock = threading.Lock()
+latest_frames = {
+    'depth': None,
+    'rgb': None,
+    'depth_m': None,  # metric float32 array for OD depth gating
+}
+latest_target = None  # detected target dict (or None)
+latest_frame_version = 0
+camera_fx = None  # RealSense color intrinsic, set by capture thread
+od_calibration = od_load_calibration() if od_load_calibration is not None else None
+capture_thread_handle = None
+detection_thread_handle = None
+capture_stop_event = threading.Event()
+
+
+def _capture_loop():
+    """Single owner of the camera. Just grabs frames at camera rate — no detection."""
+    global latest_frame_version, camera_fx
+    while not capture_stop_event.is_set():
+        try:
+            rgb_frame = None
+            depth_colormap = None
+            depth_metric = None
+
+            with depth_camera_lock:
+                state = _open_depth_camera()
+
+                if state['backend'] == 'realsense':
+                    rs_frames = state['pipeline'].wait_for_frames()
+                    aligned = state['align'].process(rs_frames)
+
+                    color = aligned.get_color_frame()
+                    if color:
+                        rgb_frame = np.asanyarray(color.get_data())
+                        if camera_fx is None:
+                            try:
+                                vp = color.profile.as_video_stream_profile()
+                                camera_fx = vp.get_intrinsics().fx
+                                print(f'[API] RealSense color fx={camera_fx:.1f}')
+                            except Exception:
+                                pass
+
+                    depth = aligned.get_depth_frame()
+                    if depth:
+                        depth_raw = np.asanyarray(depth.get_data())
+                        depth_metric = depth_raw.astype(np.float32) * depth.get_units()
+                        scaled = cv2.convertScaleAbs(depth_raw, alpha=0.03)
+                        depth_colormap = cv2.applyColorMap(
+                            cv2.bitwise_not(scaled), cv2.COLORMAP_JET
+                        )
+                else:
+                    ok, frame = state['capture'].read()
+                    if ok:
+                        rgb_frame = frame
+                        depth_colormap = frame
+
+            with frame_buffer_lock:
+                if rgb_frame is not None:
+                    latest_frames['rgb'] = rgb_frame
+                    latest_frame_version += 1
+                if depth_colormap is not None:
+                    latest_frames['depth'] = depth_colormap
+                if depth_metric is not None:
+                    latest_frames['depth_m'] = depth_metric
+        except Exception as e:
+            print(f'[API] Capture loop error: {e}')
+            time.sleep(0.1)
+
+
+def _serialize_target(stats):
+    """Convert detect()'s stats dict into a JSON-safe payload."""
+    if not stats or not stats.get('centroid'):
+        return None
+    x, y, w, h = stats['bbox']
+    cx, cy = stats['centroid']
+    payload = {
+        'bbox': {'x': int(x), 'y': int(y), 'w': int(w), 'h': int(h)},
+        'centroid': {'x': int(cx), 'y': int(cy)},
+        'wetness': stats.get('wetness', ''),
+        'dry_fraction': float(stats.get('dry_fraction', 0.0) or 0.0),
+    }
+    dist = stats.get('distance')
+    if dist is not None:
+        payload['distance_m'] = float(dist)
+    diam = stats.get('real_diameter')
+    if diam is not None:
+        payload['diameter_m'] = float(diam)
+    return payload
+
+
+def _detection_loop():
+    """Run main_lab.detect() on the latest RGB frame and confirm with a temporal lock.
+
+    Mirrors the inline state machine in od_bridge2/main.py:run_realsense — a
+    candidate must persist CONFIRM_SECONDS before it is published, and the lock
+    holds for LOST_SECONDS after the last sighting so brief misses don't drop
+    the overlay.
+    """
+    global latest_target
+    if od_detect is None or od_calibration is None:
+        print('[API] OD detect() unavailable — detection loop exiting')
+        return
+
+    CONFIRM_SECONDS = 0.3
+    LOST_SECONDS = 0.3
+    prev_centroid = None
+    streak_start = None
+    last_seen = None
+    confirmed = False
+    last_target_payload = None
+    last_seen_version = -1
+
+    while not capture_stop_event.is_set():
+        try:
+            with frame_buffer_lock:
+                version = latest_frame_version
+                if version == last_seen_version:
+                    rgb_copy = None
+                    depth_copy = None
+                else:
+                    rgb = latest_frames.get('rgb')
+                    depth_m = latest_frames.get('depth_m')
+                    rgb_copy = rgb.copy() if rgb is not None else None
+                    depth_copy = depth_m.copy() if depth_m is not None else None
+                    last_seen_version = version
+
+            if rgb_copy is None:
+                time.sleep(0.02)
+                continue
+
+            _frame, _mask, stats = od_detect(
+                rgb_copy, od_calibration,
+                depth_m=depth_copy, fx=camera_fx,
+                prev_centroid=prev_centroid, draw=False,
+            )
+
+            now = time.monotonic()
+            centroid = stats.get('centroid') if stats else None
+
+            if centroid is not None:
+                if prev_centroid is None or streak_start is None:
+                    streak_start = now
+                last_seen = now
+                prev_centroid = centroid
+                if not confirmed and now - streak_start >= CONFIRM_SECONDS:
+                    confirmed = True
+                if confirmed:
+                    last_target_payload = _serialize_target(stats)
+            else:
+                if last_seen is not None and now - last_seen > LOST_SECONDS:
+                    confirmed = False
+                    streak_start = None
+                    prev_centroid = None
+                    last_target_payload = None
+
+            with frame_buffer_lock:
+                latest_target = last_target_payload if confirmed else None
+        except Exception as e:
+            print(f'[API] Detection loop error: {e}')
+            time.sleep(0.1)
+
+
+def _start_capture_thread():
+    global capture_thread_handle, detection_thread_handle
+    capture_stop_event.clear()
+    if capture_thread_handle is None or not capture_thread_handle.is_alive():
+        capture_thread_handle = threading.Thread(target=_capture_loop, daemon=True)
+        capture_thread_handle.start()
+        print('[API] Camera capture thread started')
+    if detection_thread_handle is None or not detection_thread_handle.is_alive():
+        detection_thread_handle = threading.Thread(target=_detection_loop, daemon=True)
+        detection_thread_handle.start()
+        print('[API] Circle detection thread started')
+
+
+def _stop_capture_thread():
+    global capture_thread_handle, detection_thread_handle
+    capture_stop_event.set()
+    if capture_thread_handle is not None:
+        capture_thread_handle.join(timeout=2)
+        capture_thread_handle = None
+    if detection_thread_handle is not None:
+        detection_thread_handle.join(timeout=2)
+        detection_thread_handle = None
+
 
 def _capture_camera_frame(view='depth'):
+    """Return a copy of the latest frame for the requested view, or None."""
     if cv2 is None:
         raise RuntimeError('OpenCV is required for camera streaming')
 
-    with depth_camera_lock:
-        state = _open_depth_camera()
-
-        if state['backend'] == 'realsense':
-            frames = state['pipeline'].wait_for_frames()
-            aligned = state['align'].process(frames)
-
-            if view == 'rgb':
-                color_frame = aligned.get_color_frame()
-                if not color_frame:
-                    return None
-                return np.asanyarray(color_frame.get_data())
-
-            depth_frame = aligned.get_depth_frame()
-            if not depth_frame:
-                return None
-
-            depth_image = np.asanyarray(depth_frame.get_data())
-            scaled = cv2.convertScaleAbs(depth_image, alpha=0.03)
-            return cv2.applyColorMap(cv2.bitwise_not(scaled), cv2.COLORMAP_JET)
-
-        ok, frame = state['capture'].read()
-        if not ok:
-            return None
-
-        return frame
+    with frame_buffer_lock:
+        frame = latest_frames.get(view)
+        return frame.copy() if frame is not None else None
 
 
 def _run_mediamtx():
@@ -183,11 +357,18 @@ def _start_stream_publisher(view_name):
         print(f'[API] Publishing {view_name} camera stream via RTMP to MediaMTX path /{view_name}')
 
         def _publisher_loop():
+            target_dt = 1.0 / 30.0
+            next_tick = time.monotonic()
             try:
                 while proc.poll() is None:
+                    now = time.monotonic()
+                    sleep_for = next_tick - now
+                    if sleep_for > 0:
+                        time.sleep(sleep_for)
+                    next_tick = max(next_tick + target_dt, time.monotonic())
+
                     frame = _capture_camera_frame(view_name)
                     if frame is None:
-                        time.sleep(0.05)
                         continue
 
                     if frame.shape[:2] != (480, 640):
@@ -219,6 +400,7 @@ def _start_stream_publisher(view_name):
 
 def _start_camera_streams():
     _run_mediamtx()
+    _start_capture_thread()
     _start_stream_publisher('depth')
     _start_stream_publisher('rgb')
 
@@ -237,6 +419,8 @@ def _stop_camera_streams():
             except Exception:
                 pass
         stream_publishers[view_name] = None
+
+    _stop_capture_thread()
 
     global mediamtx_process
     if mediamtx_process is not None:
@@ -451,6 +635,28 @@ def rgb_camera_stream():
     except Exception as e:
         print(f'[API] RGB camera stream error: {e}')
         return jsonify({'success': False, 'error': str(e)}), 503
+
+
+@app.route('/camera/detections', methods=['GET'])
+def detection_stream():
+    """SSE stream of the detected target in source frame coords (640x480)."""
+    def event_stream():
+        while True:
+            time.sleep(0.05)
+            with frame_buffer_lock:
+                target = dict(latest_target) if latest_target else None
+            payload = json.dumps({
+                'width': 640,
+                'height': 480,
+                'target': target,
+            })
+            yield f'data: {payload}\n\n'
+
+    return Response(
+        stream_with_context(event_stream()),
+        mimetype='text/event-stream',
+        headers={'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no'},
+    )
 
 
 @app.route('/payload/release', methods=['POST'])
