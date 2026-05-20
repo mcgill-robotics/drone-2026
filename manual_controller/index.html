@@ -28,15 +28,21 @@
                     <div class="screen-header">
                         <h2>Depth Camera Feed</h2>
                         <div class="screen-info">
-                            <span class="info-badge">Resolution: 640x480</span>
-                            <span class="info-badge">FPS: 30</span>
+                            <span class="info-badge" id="depth-stream-status">Connecting...</span>
+                            <span class="info-badge">Depth Stream</span>
                         </div>
                     </div>
                     <div class="camera-container">
-                        <div class="camera-feed">
-                            <div class="placeholder-image depth-placeholder">
+                        <div class="camera-feed live-feed">
+                            <img
+                                id="depth-camera-stream"
+                                class="live-camera-stream"
+                                src=""
+                                alt="Depth camera stream"
+                            >
+                            <div class="stream-overlay" id="depth-camera-overlay">
                                 <div class="placeholder-text">Depth Camera Stream</div>
-                                <div class="placeholder-subtext">Waiting for connection...</div>
+                                <div class="placeholder-subtext">Waiting for Jetson feed...</div>
                             </div>
                         </div>
                     </div>
@@ -61,23 +67,6 @@
                     </div>
                 </div>
 
-                <!-- Google Maps Screen -->
-                <div class="screen" id="google-maps">
-                    <div class="screen-header">
-                        <h2>Mission Planning Map</h2>
-                        <div class="screen-info">
-                            <span class="info-badge" id="target-count">Targets: 0</span>
-                            <button class="add-target-btn" id="add-target-btn">+ Add Target</button>
-                        </div>
-                    </div>
-                    <div class="map-container">
-                        <div class="placeholder-image maps-placeholder">
-                            <div class="placeholder-text">Google Maps Integration</div>
-                            <div class="placeholder-subtext">Click on map to add targets</div>
-                            <div class="targets-list" id="targets-list"></div>
-                        </div>
-                    </div>
-                </div>
             </div>
         </main>
 
@@ -91,6 +80,10 @@
                 <button class="control-btn release-payload-btn" id="release-payload-btn">
                     <span class="btn-icon">📦</span>
                     <span class="btn-text">Release Payload</span>
+                </button>
+                <button class="control-btn small-payload-btn" id="small-payload-btn">
+                    <span class="btn-icon">📦</span>
+                    <span class="btn-text">Small Payload</span>
                 </button>
                 <button class="control-btn spray-water-btn" id="spray-water-btn">
                     <span class="btn-icon">💧</span>

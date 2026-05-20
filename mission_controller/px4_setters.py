@@ -284,6 +284,43 @@ class PX4Setters:
             print(f"[PX4] Disarm failed: {str(e)}")
             return False
 
+    def _send_servo_command(self, servo_channel, pwm_value, timeout=10):
+        """Send a MAV_CMD_DO_SET_SERVO command to a single servo channel."""
+        if not self.connected:
+            print("[PX4] Not connected to MAVROS, cannot send servo command")
+            return False
+
+        if not self.command_long_client.wait_for_service(timeout_sec=5):
+            print("[PX4] /cmd/command service unavailable")
+            return False
+
+        try:
+            req = CommandLong.Request()
+            req.command = 183  # MAV_CMD_DO_SET_SERVO
+            req.confirmation = 0
+            req.param1 = float(servo_channel)
+            req.param2 = float(pwm_value)
+            req.param3 = 0.0
+            req.param4 = 0.0
+            req.param5 = 0.0
+            req.param6 = 0.0
+            req.param7 = 0.0
+
+            future = self.command_long_client.call_async(req)
+            start = time.time()
+            while not future.done() and (time.time() - start) < timeout:
+                rclpy.spin_once(self, timeout_sec=0.1)
+                time.sleep(0.1)
+
+            if future.done() and future.result() and future.result().success:
+                return True
+
+            print(f"[PX4] Servo command rejected for channel {servo_channel}")
+            return False
+        except Exception as e:
+            print(f"[PX4] Servo command failed for channel {servo_channel}: {str(e)}")
+            return False
+
     def change_mode(self, mode_name, timeout=30):
         """
         Change vehicle flight mode
@@ -935,41 +972,13 @@ class PX4Setters:
         Returns:
             True if command sent successfully, False otherwise
         """
-        if not self.connected:
-            print("[PX4] Not connected to MAVROS, cannot activate spray")
-            return False
-
-        if not self.command_long_client.wait_for_service(timeout_sec=5):
-            print("[PX4] /cmd/command service unavailable")
-            return False
-
         print(f"[PX4] Activating spray pump on channel {servo_channel} (PWM: {pwm_value})")
-        try:
-            req = CommandLong.Request()
-            req.command = 183  # MAV_CMD_DO_SET_SERVO
-            req.param1 = float(servo_channel)
-            req.param2 = float(pwm_value)
-            req.param3 = 0.0
-            req.param4 = 0.0
-            req.param5 = 0.0
-            req.param6 = 0.0
-            req.param7 = 0.0
+        if self._send_servo_command(servo_channel, pwm_value, timeout=timeout):
+            print("[PX4] Spray pump activated successfully")
+            return True
 
-            future = self.command_long_client.call_async(req)
-            start = time.time()
-            while not future.done() and (time.time() - start) < timeout:
-                rclpy.spin_once(self, timeout_sec=0.1)
-                time.sleep(0.1)
-
-            if future.done() and future.result() and future.result().success:
-                print("[PX4] Spray pump activated successfully")
-                return True
-            else:
-                print("[PX4] Spray activation command rejected")
-                return False
-        except Exception as e:
-            print(f"[PX4] Spray activation failed: {str(e)}")
-            return False
+        print("[PX4] Spray activation command rejected")
+        return False
 
     def deactivate_spray(self, servo_channel=3, timeout=10):
         """
@@ -982,38 +991,55 @@ class PX4Setters:
         Returns:
             True if command sent successfully, False otherwise
         """
-        if not self.connected:
-            print("[PX4] Not connected to MAVROS, cannot deactivate spray")
-            return False
-
-        if not self.command_long_client.wait_for_service(timeout_sec=5):
-            print("[PX4] /cmd/command service unavailable")
-            return False
-
         print(f"[PX4] Deactivating spray pump on channel {servo_channel}")
+        if self._send_servo_command(servo_channel, 1500.0, timeout=timeout):
+            print("[PX4] Spray pump deactivated successfully")
+            return True
+
+        print("[PX4] Spray deactivation command rejected")
+        return False
+
+    def release_payload(self, servo_channels=(6, 7), release_pwm=1900, neutral_pwm=1500,
+                        pulse_seconds=0.5, timeout=10):
+        """
+        Release the payload using a one-shot pulse on the two payload servos.
+
+        The release is not a hold-to-run action: a single button press sends
+        the release pulse, then returns both servos to neutral.
+        """
+        print(f"[PX4] Releasing payload on channels {servo_channels} (PWM: {release_pwm})")
+
         try:
-            req = CommandLong.Request()
-            req.command = 183  # MAV_CMD_DO_SET_SERVO
-            req.param1 = float(servo_channel)
-            req.param2 = 1500.0  # PWM neutral position
-            req.param3 = 0.0
-            req.param4 = 0.0
-            req.param5 = 0.0
-            req.param6 = 0.0
-            req.param7 = 0.0
+            for servo_channel in servo_channels:
+                if not self._send_servo_command(servo_channel, release_pwm, timeout=timeout):
+                    print(f"[PX4] Payload release failed on channel {servo_channel}")
+                    return False
 
-            future = self.command_long_client.call_async(req)
-            start = time.time()
-            while not future.done() and (time.time() - start) < timeout:
-                rclpy.spin_once(self, timeout_sec=0.1)
-                time.sleep(0.1)
+            time.sleep(max(0.0, float(pulse_seconds)))
 
-            if future.done() and future.result() and future.result().success:
-                print("[PX4] Spray pump deactivated successfully")
-                return True
-            else:
-                print("[PX4] Spray deactivation command rejected")
-                return False
+            for servo_channel in servo_channels:
+                if not self._send_servo_command(servo_channel, neutral_pwm, timeout=timeout):
+                    print(f"[PX4] Payload neutral reset failed on channel {servo_channel}")
+                    return False
+
+            print("[PX4] Payload released successfully")
+            return True
         except Exception as e:
-            print(f"[PX4] Spray deactivation failed: {str(e)}")
+            print(f"[PX4] Payload release failed: {str(e)}")
             return False
+
+    def release_small_payload(self, servo_channel=4, release_pwm=1900, neutral_pwm=1500,
+                              pulse_seconds=0.5, timeout=10):
+        """
+        Release the small payload using a one-shot pulse on servo 4.
+
+        This is a single press action, not a hold-to-run actuator.
+        """
+        print(f"[PX4] Releasing small payload on channel {servo_channel} (PWM: {release_pwm})")
+        return self.release_payload(
+            servo_channels=(servo_channel,),
+            release_pwm=release_pwm,
+            neutral_pwm=neutral_pwm,
+            pulse_seconds=pulse_seconds,
+            timeout=timeout,
+        )

@@ -1,10 +1,11 @@
 // DOM Elements
 const screenshotBtn = document.getElementById('screenshot-btn');
 const releasePayloadBtn = document.getElementById('release-payload-btn');
+const smallPayloadBtn = document.getElementById('small-payload-btn');
 const sprayWaterBtn = document.getElementById('spray-water-btn');
-const addTargetBtn = document.getElementById('add-target-btn');
-const targetsList = document.getElementById('targets-list');
-const targetCountBadge = document.getElementById('target-count');
+const depthCameraStream = document.getElementById('depth-camera-stream');
+const depthCameraOverlay = document.getElementById('depth-camera-overlay');
+const depthStreamStatus = document.getElementById('depth-stream-status');
 const toastContainer = document.getElementById('toast-container');
 
 // ===== API CONFIGURATION =====
@@ -25,7 +26,7 @@ let sprayState = {
     pwmOff: 1500            // PWM value when OFF (neutral)
 };
 
-let targetCount = 0;
+const DEPTH_CAMERA_STREAM_URL = `${API_CONFIG.baseUrl}/camera/depth.mjpg`;
 
 // ===== SPRAY CONTROL SYSTEM =====
 /**
@@ -122,6 +123,10 @@ releasePayloadBtn.addEventListener('click', () => {
     handleReleasePayload();
 });
 
+smallPayloadBtn.addEventListener('click', () => {
+    handleSmallPayload();
+});
+
 // Spray water button - Pushbutton mode (hold to spray)
 sprayWaterBtn.addEventListener('mousedown', async (e) => {
     console.log('[SPRAY] Mousedown event triggered');
@@ -191,52 +196,86 @@ function handleScreenshot() {
 }
 
 function handleReleasePayload() {
-    showToast('Payload release initiated!', 'warning');
-    console.log('Release payload action triggered');
-    // TODO: Implement payload release functionality
+    console.log('[PAYLOAD] Release requested');
+    fetch(`${API_CONFIG.baseUrl}/payload/release`, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+            channels: [6, 7],
+            release_pwm: 1900,
+            neutral_pwm: 1500,
+            pulse_seconds: 0.5
+        })
+    })
+        .then(response => response.json().then(data => ({ status: response.status, data })))
+        .then(({ status, data }) => {
+            console.log('[PAYLOAD] API response status:', status);
+            console.log('[PAYLOAD] API response data:', data);
+
+            if (data.success) {
+                showToast('📦 Payload released!', 'success');
+            } else {
+                showToast('❌ Payload release failed: ' + (data.error || 'Unknown error'), 'error');
+            }
+        })
+        .catch(error => {
+            console.error('[PAYLOAD] Connection error:', error);
+            showToast('❌ Cannot connect to payload system: ' + error.message, 'error');
+        });
 }
 
-// ===== MAP TARGET MANAGEMENT =====
-addTargetBtn.addEventListener('click', () => {
-    addTarget();
-});
+function handleSmallPayload() {
+    console.log('[PAYLOAD] Small payload release requested');
+    fetch(`${API_CONFIG.baseUrl}/payload/small-release`, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+            channel: 4,
+            release_pwm: 1900,
+            neutral_pwm: 1500,
+            pulse_seconds: 0.5
+        })
+    })
+        .then(response => response.json().then(data => ({ status: response.status, data })))
+        .then(({ status, data }) => {
+            console.log('[PAYLOAD] Small payload API response status:', status);
+            console.log('[PAYLOAD] Small payload API response data:', data);
 
-function addTarget() {
-    targetCount++;
-    const targetItem = document.createElement('div');
-    targetItem.className = 'target-item';
-    const targetId = targetCount;
-
-    // Generate random coordinates for demo (would come from map click in real implementation)
-    const lat = (Math.random() * 180 - 90).toFixed(4);
-    const lng = (Math.random() * 360 - 180).toFixed(4);
-
-    targetItem.innerHTML = `
-        <span class="target-item-coords">Target ${targetId}: ${lat}°, ${lng}°</span>
-        <button class="target-item-remove" onclick="removeTarget(${targetId})">✕</button>
-    `;
-
-    targetsList.appendChild(targetItem);
-    updateTargetCount();
-    showToast(`Target ${targetId} added to map`, 'success');
-    console.log(`Target ${targetId} added at ${lat}, ${lng}`);
+            if (data.success) {
+                showToast('Small payload released!', 'success');
+            } else {
+                showToast('Small payload release failed: ' + (data.error || 'Unknown error'), 'error');
+            }
+        })
+        .catch(error => {
+            console.error('[PAYLOAD] Small payload connection error:', error);
+            showToast('Cannot connect to small payload system: ' + error.message, 'error');
+        });
 }
 
-function removeTarget(targetId) {
-    const targets = targetsList.querySelectorAll('.target-item');
-    targets.forEach((target, index) => {
-        if (target.textContent.includes(`Target ${targetId}`)) {
-            target.remove();
-        }
-    });
-    targetCount--;
-    updateTargetCount();
-    showToast(`Target ${targetId} removed`, 'info');
-    console.log(`Target ${targetId} removed`);
-}
+function initDepthCameraStream() {
+    if (!depthCameraStream) {
+        return;
+    }
 
-function updateTargetCount() {
-    targetCountBadge.textContent = `Targets: ${targetsList.children.length}`;
+    depthCameraStream.onload = () => {
+        depthStreamStatus.textContent = 'Live';
+        depthCameraOverlay.style.display = 'none';
+    };
+
+    depthCameraStream.onerror = () => {
+        depthStreamStatus.textContent = 'Offline';
+        depthCameraOverlay.style.display = 'flex';
+        depthCameraOverlay.querySelector('.placeholder-subtext').textContent = 'Unable to connect to depth feed';
+        console.warn('[DEPTH] Stream failed to load from', DEPTH_CAMERA_STREAM_URL);
+    };
+
+    depthCameraStream.src = DEPTH_CAMERA_STREAM_URL;
+    depthStreamStatus.textContent = 'Connecting...';
 }
 
 // ===== TOAST NOTIFICATION SYSTEM =====
@@ -277,6 +316,7 @@ document.addEventListener('DOMContentLoaded', () => {
     console.log('Drone Control Panel initialized');
     console.log('[SPRAY] Using pushbutton mode (hold to spray)');
     showToast('System ready for operation', 'success');
+    initDepthCameraStream();
     
     // Check API connection on load
     checkAPIHealth().then(connected => {
@@ -322,8 +362,9 @@ document.addEventListener('keyup', (e) => {
 
 // ===== PREVENT PAGE RELOAD =====
 window.addEventListener('beforeunload', (e) => {
-    if (targetCount > 0) {
-        // Optional: add confirmation before closing
+    if (sprayState.isActive) {
+        e.preventDefault();
+        e.returnValue = '';
     }
 });
 
