@@ -6,7 +6,52 @@ const sprayWaterBtn = document.getElementById('spray-water-btn');
 const depthCameraStream = document.getElementById('depth-camera-stream');
 const depthCameraOverlay = document.getElementById('depth-camera-overlay');
 const depthStreamStatus = document.getElementById('depth-stream-status');
+const apiStatusEl = document.getElementById('api-status');
+const apiStatusText = apiStatusEl ? apiStatusEl.querySelector('.status-text') : null;
+const themeToggleBtn = document.getElementById('theme-toggle');
 const toastContainer = document.getElementById('toast-container');
+
+// ===== THEME (sunlight readability) =====
+function applyTheme(theme) {
+    document.documentElement.dataset.theme = theme;
+    if (themeToggleBtn) {
+        const icon = themeToggleBtn.querySelector('.theme-toggle-icon');
+        const label = themeToggleBtn.querySelector('.theme-toggle-label');
+        if (theme === 'sun') {
+            if (icon) icon.textContent = '☀️';
+            if (label) label.textContent = 'Sun';
+        } else {
+            if (icon) icon.textContent = '🌙';
+            if (label) label.textContent = 'Night';
+        }
+    }
+    try { localStorage.setItem('drone-theme', theme); } catch (e) { /* ignore */ }
+}
+
+(function initTheme() {
+    let stored = 'sun';
+    try { stored = localStorage.getItem('drone-theme') || 'sun'; } catch (e) { /* ignore */ }
+    applyTheme(stored);
+})();
+
+if (themeToggleBtn) {
+    themeToggleBtn.addEventListener('click', () => {
+        const current = document.documentElement.dataset.theme || 'sun';
+        applyTheme(current === 'sun' ? 'night' : 'sun');
+    });
+}
+
+function setApiStatus(state, label) {
+    if (!apiStatusEl) return;
+    apiStatusEl.dataset.state = state;
+    if (apiStatusText) apiStatusText.textContent = label;
+}
+
+function setDepthStatus(state, label) {
+    if (!depthStreamStatus) return;
+    depthStreamStatus.dataset.state = state;
+    depthStreamStatus.textContent = label;
+}
 
 // ===== API CONFIGURATION =====
 const API_CONFIG = {
@@ -263,19 +308,19 @@ function initDepthCameraStream() {
     }
 
     depthCameraStream.onload = () => {
-        depthStreamStatus.textContent = 'Live';
+        setDepthStatus('connected', 'Live');
         depthCameraOverlay.style.display = 'none';
     };
 
     depthCameraStream.onerror = () => {
-        depthStreamStatus.textContent = 'Offline';
+        setDepthStatus('disconnected', 'Offline');
         depthCameraOverlay.style.display = 'flex';
         depthCameraOverlay.querySelector('.placeholder-subtext').textContent = 'Unable to connect to depth feed';
         console.warn('[DEPTH] Stream failed to load from', DEPTH_CAMERA_STREAM_URL);
     };
 
     depthCameraStream.src = DEPTH_CAMERA_STREAM_URL;
-    depthStreamStatus.textContent = 'Connecting...';
+    setDepthStatus('connecting', 'Connecting…');
 }
 
 // ===== TOAST NOTIFICATION SYSTEM =====
@@ -318,12 +363,21 @@ document.addEventListener('DOMContentLoaded', () => {
     showToast('System ready for operation', 'success');
     initDepthCameraStream();
     
-    // Check API connection on load
-    checkAPIHealth().then(connected => {
-        if (!connected) {
-            showToast('Warning: Spray control API not connected. Ensure api_server.py is running on port 5000', 'warning');
-        }
-    });
+    setApiStatus('connecting', 'Connecting…');
+    const refreshApiStatus = (notifyOnFail) => {
+        checkAPIHealth().then(connected => {
+            if (connected) {
+                setApiStatus('connected', 'API Online');
+            } else {
+                setApiStatus('disconnected', 'API Offline');
+                if (notifyOnFail) {
+                    showToast('Spray control API not connected. Ensure api_server.py is running on port 5000', 'warning');
+                }
+            }
+        });
+    };
+    refreshApiStatus(true);
+    setInterval(() => refreshApiStatus(false), 10000);
 });
 
 // ===== KEYBOARD SHORTCUTS =====

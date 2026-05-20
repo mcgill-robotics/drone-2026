@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="sun">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -12,24 +12,28 @@
         <header class="header">
             <div class="header-content">
                 <h1>🚁 Drone Control Panel</h1>
-                <div class="status-indicator">
-                    <span class="status-dot"></span>
-                    <span class="status-text">System Ready</span>
+                <div class="header-right">
+                    <div class="status-indicator" id="api-status" data-state="connecting" title="API connection status">
+                        <span class="status-dot"></span>
+                        <span class="status-text">Connecting…</span>
+                    </div>
+                    <button class="theme-toggle" id="theme-toggle" title="Toggle sunlight / night mode" aria-label="Toggle theme">
+                        <span class="theme-toggle-icon">☀️</span>
+                        <span class="theme-toggle-label">Sun</span>
+                    </button>
                 </div>
             </div>
         </header>
 
         <!-- Main Content -->
         <main class="main-content">
-            <!-- Screens Grid -->
             <div class="screens-grid">
                 <!-- Depth Camera Screen -->
-                <div class="screen" id="depth-camera">
+                <section class="screen" id="depth-camera">
                     <div class="screen-header">
-                        <h2>Depth Camera Feed</h2>
+                        <h2>Depth Camera</h2>
                         <div class="screen-info">
-                            <span class="info-badge" id="depth-stream-status">Connecting...</span>
-                            <span class="info-badge">Depth Stream</span>
+                            <span class="info-badge" id="depth-stream-status" data-state="connecting">Connecting…</span>
                         </div>
                     </div>
                     <div class="camera-container">
@@ -42,58 +46,60 @@
                             >
                             <div class="stream-overlay" id="depth-camera-overlay">
                                 <div class="placeholder-text">Depth Camera Stream</div>
-                                <div class="placeholder-subtext">Waiting for Jetson feed...</div>
+                                <div class="placeholder-subtext">Waiting for Jetson feed…</div>
                             </div>
                         </div>
                     </div>
-                </div>
+                </section>
 
                 <!-- RTSP Camera Screen -->
-                <div class="screen" id="rtsp-camera">
+                <section class="screen" id="rtsp-camera">
                     <div class="screen-header">
-                        <h2>RTSP Camera Feed</h2>
+                        <h2>RTSP Camera</h2>
                         <div class="screen-info">
-                            <span class="info-badge">Resolution: 1920x1080</span>
-                            <span class="info-badge">FPS: 30</span>
+                            <span class="info-badge">1920×1080 · 30fps</span>
                         </div>
                     </div>
                     <div class="camera-container">
                         <div class="camera-feed">
                             <div class="placeholder-image rtsp-placeholder">
                                 <div class="placeholder-text">RTSP Camera Stream</div>
-                                <div class="placeholder-subtext">Waiting for connection...</div>
+                                <div class="placeholder-subtext">Waiting for connection…</div>
                             </div>
                         </div>
                     </div>
-                </div>
-
+                </section>
             </div>
         </main>
 
         <!-- Control Panel -->
         <footer class="control-panel">
             <div class="control-buttons">
-                <button class="control-btn screenshot-btn" id="screenshot-btn">
+                <button class="control-btn screenshot-btn" id="screenshot-btn" title="Capture screenshot (Ctrl+S)">
                     <span class="btn-icon">📸</span>
                     <span class="btn-text">Screenshot</span>
+                    <span class="btn-shortcut"><kbd>Ctrl</kbd>+<kbd>S</kbd></span>
                 </button>
-                <button class="control-btn release-payload-btn" id="release-payload-btn">
-                    <span class="btn-icon">📦</span>
-                    <span class="btn-text">Release Payload</span>
-                </button>
-                <button class="control-btn small-payload-btn" id="small-payload-btn">
+                <button class="control-btn small-payload-btn" id="small-payload-btn" title="Release small payload">
                     <span class="btn-icon">📦</span>
                     <span class="btn-text">Small Payload</span>
+                    <span class="btn-shortcut">Channel 4</span>
                 </button>
-                <button class="control-btn spray-water-btn" id="spray-water-btn">
+                <button class="control-btn release-payload-btn" id="release-payload-btn" title="Release main payload (Ctrl+P)">
+                    <span class="btn-icon">📦</span>
+                    <span class="btn-text">Release Payload</span>
+                    <span class="btn-shortcut"><kbd>Ctrl</kbd>+<kbd>P</kbd></span>
+                </button>
+                <button class="control-btn spray-water-btn" id="spray-water-btn" title="Hold to spray water (Ctrl+W)">
                     <span class="btn-icon">💧</span>
                     <span class="btn-text">Spray Water</span>
+                    <span class="btn-shortcut">Hold · <kbd>Ctrl</kbd>+<kbd>W</kbd></span>
                 </button>
             </div>
         </footer>
 
         <!-- Toast Notifications -->
-        <div id="toast-container" class="toast-container"></div>
+        <div id="toast-container" class="toast-container" aria-live="polite"></div>
     </div>
 
     <script src="main.js"></script>
