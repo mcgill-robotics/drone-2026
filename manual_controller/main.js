@@ -239,10 +239,33 @@ sprayWaterBtn.addEventListener('click', async (e) => {
     }
 });
 
-function handleScreenshot() {
-    showToast('Screenshot captured!', 'info');
-    console.log('Screenshot action triggered');
-    // TODO: Implement screenshot functionality
+async function handleScreenshot() {
+    console.log('[SCREENSHOT] Screenshot requested');
+
+    try {
+        const response = await fetch(`${API_CONFIG.baseUrl}/camera/screenshot`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                view: currentDepthView || 'rgb'
+            })
+        });
+
+        const data = await response.json();
+
+        if (data.success) {
+            showToast(`📸 Screenshot saved: ${data.filename}`, 'success');
+            console.log('[SCREENSHOT] Saved:', data.filepath);
+        } else {
+            showToast('Screenshot failed: ' + (data.error || 'Unknown error'), 'error');
+        }
+
+    } catch (error) {
+        console.error('[SCREENSHOT] Connection error:', error);
+        showToast('Cannot connect to screenshot API: ' + error.message, 'error');
+    }
 }
 
 function handleReleasePayload() {

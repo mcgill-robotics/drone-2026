@@ -398,7 +398,7 @@ body {
 
 .control-buttons {
     display: grid;
-    grid-template-columns: repeat(4, minmax(160px, 1fr));
+    grid-template-columns: repeat(5, minmax(150px, 1fr));
     gap: 0.85rem;
     max-width: 1600px;
     margin: 0 auto;

@@ -834,6 +834,86 @@ def gimbal_set():
         print(f"[API] Error in gimbal_set: {e}")
         return jsonify({'success': False, 'error': str(e)}), 500
 
+@app.route('/camera/screenshot', methods=['POST'])
+def camera_screenshot():
+    """
+    Save RGB or depth screenshot.
+
+    POST /camera/screenshot
+    {
+        "view": "rgb" | "depth",
+        "mission": "mission1" | "mission2"
+    }
+    """
+
+    try:
+        data = request.get_json(silent=True) or {}
+
+        view = data.get("view", "rgb")
+        mission = data.get("mission", "mission1")
+
+        if view not in ("rgb", "depth"):
+            return jsonify({
+                "success": False,
+                "error": "Invalid view. Use 'rgb' or 'depth'."
+            }), 400
+
+        if mission not in ("mission1", "mission2"):
+            return jsonify({
+                "success": False,
+                "error": "Invalid mission. Use 'mission1' or 'mission2'."
+            }), 400
+
+        frame = _capture_camera_frame(view)
+
+        if frame is None:
+            return jsonify({
+                "success": False,
+                "error": "No camera frame available yet."
+            }), 503
+
+        save_dir = os.path.join(
+            _REPO_ROOT,
+            "screenshots",
+            mission,
+            view,
+        )
+
+        os.makedirs(save_dir, exist_ok=True)
+
+        existing_files = [
+            f for f in os.listdir(save_dir)
+            if f.startswith(f"{view}_") and f.endswith(".jpg")
+        ]
+
+        next_index = len(existing_files) + 1
+
+        filename = f"{view}_{next_index:04d}.jpg"
+        filepath = os.path.join(save_dir, filename)
+
+        ok = cv2.imwrite(filepath, frame)
+
+        if not ok:
+            return jsonify({
+                "success": False,
+                "error": "Failed to write screenshot file."
+            }), 500
+
+        return jsonify({
+            "success": True,
+            "mission": mission,
+            "view": view,
+            "filename": filename,
+            "filepath": filepath,
+        })
+
+    except Exception as e:
+        print(f"[API] Screenshot error: {e}")
+        return jsonify({
+            "success": False,
+            "error": str(e)
+        }), 500
+
 def main():
     """Main entry point."""
     parser = argparse.ArgumentParser(
