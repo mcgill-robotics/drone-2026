@@ -46,9 +46,14 @@
                         <div class="camera-container">
                             <div class="camera-feed live-feed">
                                 <video id="depth-camera-stream" class="live-camera-stream" autoplay muted playsinline></video>
+
                                 <div class="stream-overlay" id="depth-camera-overlay">
                                     <div class="placeholder-text">Depth WebRTC Stream</div>
                                     <div class="placeholder-subtext">Waiting for MediaMTX…</div>
+                                </div>
+
+                                <div class="distance-overlay" id="depth-distance-overlay" data-state="invalid">
+                                    Distance: waiting for depth data…
                                 </div>
                             </div>
                         </div>

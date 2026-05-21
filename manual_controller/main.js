@@ -6,6 +6,7 @@ const sprayWaterBtn = document.getElementById('spray-water-btn');
 const depthCameraStream = document.getElementById('depth-camera-stream');
 const depthCameraOverlay = document.getElementById('depth-camera-overlay');
 const depthStreamStatus = document.getElementById('depth-stream-status');
+const depthDistanceOverlay = document.getElementById('depth-distance-overlay');
 const apiStatusEl = document.getElementById('api-status');
 const apiStatusText = apiStatusEl ? apiStatusEl.querySelector('.status-text') : null;
 const themeToggleBtn = document.getElementById('theme-toggle');
@@ -93,6 +94,7 @@ const WHEP_URLS = {
 
 let currentDepthView = 'depth';
 let activeWhepPc = null;
+let depthDistanceEventSource = null;
 
 async function activateSpray() {
     console.log('[SPRAY] activateSpray() called');
@@ -499,6 +501,41 @@ document.querySelectorAll('.view-toggle-btn[data-view]').forEach(btn => {
     });
 });
 
+function initDepthDistanceStream() {
+    if (!depthDistanceOverlay) return;
+
+    if (depthDistanceEventSource) {
+        depthDistanceEventSource.close();
+        depthDistanceEventSource = null;
+    }
+
+    const url = `${API_CONFIG.baseUrl}/camera/depth-distance`;
+    depthDistanceEventSource = new EventSource(url);
+
+    depthDistanceEventSource.onmessage = (event) => {
+        try {
+            const data = JSON.parse(event.data);
+
+            depthDistanceOverlay.textContent = data.message || 'Depth distance unavailable';
+
+            if (data.valid) {
+                depthDistanceOverlay.dataset.state = 'valid';
+            } else {
+                depthDistanceOverlay.dataset.state = 'invalid';
+            }
+
+        } catch (error) {
+            depthDistanceOverlay.textContent = 'Depth distance parse error';
+            depthDistanceOverlay.dataset.state = 'invalid';
+        }
+    };
+
+    depthDistanceEventSource.onerror = () => {
+        depthDistanceOverlay.textContent = 'Depth distance stream offline';
+        depthDistanceOverlay.dataset.state = 'invalid';
+    };
+}
+
 function showToast(message, type = 'info') {
     const toast = document.createElement('div');
 
@@ -538,6 +575,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     showToast('System ready for operation', 'success');
     setDepthView(currentDepthView);
+    initDepthDistanceStream();
 
     setApiStatus('connecting', 'Connecting…');
 

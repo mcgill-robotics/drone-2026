@@ -659,3 +659,30 @@ kbd {
     outline: none;
     box-shadow: var(--focus-ring);
 }
+
+.distance-overlay {
+    position: absolute;
+    left: 1rem;
+    bottom: 1rem;
+    z-index: 3;
+
+    padding: 0.55rem 0.85rem;
+    border-radius: 8px;
+
+    background: rgba(0, 0, 0, 0.78);
+    color: #ffffff;
+
+    font-size: 1rem;
+    font-weight: 800;
+    letter-spacing: 0.3px;
+
+    border: 2px solid rgba(255, 255, 255, 0.85);
+}
+
+.distance-overlay[data-state="valid"] {
+    border-color: var(--success-color);
+}
+
+.distance-overlay[data-state="invalid"] {
+    border-color: var(--warning-color);
+}

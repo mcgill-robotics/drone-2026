@@ -914,6 +914,77 @@ def camera_screenshot():
             "error": str(e)
         }), 500
 
+@app.route('/camera/depth-distance', methods=['GET'])
+def depth_distance_stream():
+    """
+    SSE stream for center-area depth distance.
+
+    It measures the median distance near the center of the depth frame.
+    If no valid depth is available, it returns a meaningful message.
+    """
+
+    def event_stream():
+        while True:
+            time.sleep(0.1)
+
+            with frame_buffer_lock:
+                depth_m = latest_frames.get('depth_m')
+                depth_copy = depth_m.copy() if depth_m is not None else None
+
+            payload = {
+                'valid': False,
+                'distance_m': None,
+                'message': 'Depth distance unavailable'
+            }
+
+            if depth_copy is not None:
+                h, w = depth_copy.shape[:2]
+
+                # Center region of the image.
+                # This avoids using only one noisy pixel.
+                box_size = 40
+                cx = w // 2
+                cy = h // 2
+
+                x1 = max(0, cx - box_size)
+                x2 = min(w, cx + box_size)
+                y1 = max(0, cy - box_size)
+                y2 = min(h, cy + box_size)
+
+                roi = depth_copy[y1:y2, x1:x2]
+
+                # Keep only meaningful RealSense depth values.
+                valid_depths = roi[
+                    (roi > 0.1) &
+                    (roi < 10.0)
+                ]
+
+                if valid_depths.size > 0:
+                    distance_m = float(np.median(valid_depths))
+
+                    payload = {
+                        'valid': True,
+                        'distance_m': distance_m,
+                        'message': f'Distance: {distance_m:.2f} m'
+                    }
+                else:
+                    payload = {
+                        'valid': False,
+                        'distance_m': None,
+                        'message': 'No valid object distance detected'
+                    }
+
+            yield f"data: {json.dumps(payload)}\n\n"
+
+    return Response(
+        stream_with_context(event_stream()),
+        mimetype='text/event-stream',
+        headers={
+            'Cache-Control': 'no-cache',
+            'X-Accel-Buffering': 'no',
+        },
+    )
+
 def main():
     """Main entry point."""
     parser = argparse.ArgumentParser(
