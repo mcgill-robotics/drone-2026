@@ -8,7 +8,6 @@
 </head>
 <body>
     <div class="container">
-        <!-- Header -->
         <header class="header">
             <div class="header-content">
                 <h1>🚁 Drone Control Panel</h1>
@@ -25,92 +24,90 @@
             </div>
         </header>
 
-        <!-- Mode Tabs -->
         <nav class="mode-tabs" role="tablist" aria-label="Drone modes">
             <button class="mode-tab active" role="tab" aria-selected="true" aria-controls="mode-mission-one" id="tab-mission-one" data-tab="mission-one">Mission One</button>
             <button class="mode-tab" role="tab" aria-selected="false" aria-controls="mode-mission-two" id="tab-mission-two" data-tab="mission-two">Mission Two</button>
         </nav>
 
-        <!-- Mission One Mode -->
         <div class="mode-panel active" id="mode-mission-one" role="tabpanel" aria-labelledby="tab-mission-one">
-        <!-- Main Content -->
-        <main class="main-content">
-            <div class="screens-grid">
-                <!-- Depth Camera Screen -->
-                <section class="screen" id="depth-camera">
-                    <div class="screen-header">
-                        <h2>Intel Depth Camera</h2>
-                        <div class="screen-info">
-                            <div class="view-toggle" role="group" aria-label="Camera view">
-                                <button type="button" class="view-toggle-btn active" id="depth-view-depth" data-view="depth" aria-pressed="true">Depth</button>
-                                <button type="button" class="view-toggle-btn" id="depth-view-rgb" data-view="rgb" aria-pressed="false">RGB</button>
-                            </div>
-                            <span class="info-badge" id="depth-stream-status" data-state="connecting">Connecting…</span>
-                        </div>
-                    </div>
-                    <div class="camera-container">
-                        <div class="camera-feed live-feed">
-                            <video
-                                id="depth-camera-stream"
-                                class="live-camera-stream"
-                                autoplay
-                                muted
-                                playsinline
-                            ></video>
-                            <div class="stream-overlay" id="depth-camera-overlay">
-                                <div class="placeholder-text">Depth WebRTC Stream</div>
-                                <div class="placeholder-subtext">Waiting for MediaMTX…</div>
+            <main class="main-content">
+                <div class="screens-grid">
+                    <section class="screen" id="depth-camera">
+                        <div class="screen-header">
+                            <h2>Intel Depth Camera</h2>
+                            <div class="screen-info">
+                                <div class="view-toggle" role="group" aria-label="Camera view">
+                                    <button type="button" class="view-toggle-btn active" id="depth-view-depth" data-view="depth" aria-pressed="true">Depth</button>
+                                    <button type="button" class="view-toggle-btn" id="depth-view-rgb" data-view="rgb" aria-pressed="false">RGB</button>
+                                </div>
+                                <span class="info-badge" id="depth-stream-status" data-state="connecting">Connecting…</span>
                             </div>
                         </div>
-                    </div>
-                </section>
-                 <!-- RTSP Camera Screen -->
-                 <section class="screen" id="rtsp-camera">
-                     <div class="screen-header">
-                         <h2>RTSP Camera</h2>
-                         <div class="screen-info">
-                             <span class="info-badge">1920×1080 · 30fps</span>
-                         </div>
-                     </div>
-                     <div class="camera-container">
-                         <div class="camera-feed">
-                             <div class="placeholder-image rtsp-placeholder">
-                                 <div class="placeholder-text">RTSP Camera Stream</div>
-                                 <div class="placeholder-subtext">Waiting for connection…</div>
-                             </div>
-                         </div>
-                     </div>
-                 </section>            </div>
-        </main>
+                        <div class="camera-container">
+                            <div class="camera-feed live-feed">
+                                <video id="depth-camera-stream" class="live-camera-stream" autoplay muted playsinline></video>
+                                <div class="stream-overlay" id="depth-camera-overlay">
+                                    <div class="placeholder-text">Depth WebRTC Stream</div>
+                                    <div class="placeholder-subtext">Waiting for MediaMTX…</div>
+                                </div>
+                            </div>
+                        </div>
+                    </section>
 
-        <!-- Control Panel -->
-        <footer class="control-panel">
-            <div class="control-buttons">
-                <button class="control-btn screenshot-btn" id="screenshot-btn" title="Capture screenshot (Ctrl+S)">
-                    <span class="btn-icon">📸</span>
-                    <span class="btn-text">Screenshot</span>
-                    <span class="btn-shortcut"><kbd>Ctrl</kbd>+<kbd>S</kbd></span>
-                </button>
-                <button class="control-btn small-payload-btn" id="small-payload-btn" title="Release small payload">
-                    <span class="btn-icon">📦</span>
-                    <span class="btn-text">Small Payload</span>
-                    <span class="btn-shortcut">Channel 4</span>
-                </button>
-                <button class="control-btn release-payload-btn" id="release-payload-btn" title="Release main payload (Ctrl+P)">
-                    <span class="btn-icon">📦</span>
-                    <span class="btn-text">Release Payload</span>
-                    <span class="btn-shortcut"><kbd>Ctrl</kbd>+<kbd>P</kbd></span>
-                </button>
-                <button class="control-btn spray-water-btn" id="spray-water-btn" title="Hold to spray water (Ctrl+W)">
-                    <span class="btn-icon">💧</span>
-                    <span class="btn-text">Spray Water</span>
-                    <span class="btn-shortcut">Hold · <kbd>Ctrl</kbd>+<kbd>W</kbd></span>
-                </button>
-            </div>
-        </footer>
+                    <section class="screen" id="rtsp-camera">
+                        <div class="screen-header">
+                            <h2>RTSP Camera</h2>
+                            <div class="screen-info">
+                                <span class="info-badge">1920×1080 · 30fps</span>
+                            </div>
+                        </div>
+                        <div class="camera-container">
+                            <div class="camera-feed">
+                                <div class="placeholder-image rtsp-placeholder">
+                                    <div class="placeholder-text">RTSP Camera Stream</div>
+                                    <div class="placeholder-subtext">Waiting for connection…</div>
+                                </div>
+                            </div>
+                        </div>
+                    </section>
+                </div>
+            </main>
+
+            <footer class="control-panel">
+                <div class="control-buttons">
+                    <button class="control-btn screenshot-btn" id="rgb-screenshot-btn" title="Capture RGB screenshot">
+                        <span class="btn-icon">📸</span>
+                        <span class="btn-text">RGB Screenshot</span>
+                        <span class="btn-shortcut">RGB</span>
+                    </button>
+
+                    <button class="control-btn screenshot-btn" id="depth-screenshot-btn" title="Capture depth screenshot">
+                        <span class="btn-icon">📸</span>
+                        <span class="btn-text">Depth Screenshot</span>
+                        <span class="btn-shortcut">Depth</span>
+                    </button>
+
+                    <button class="control-btn small-payload-btn" id="small-payload-btn" title="Release small payload">
+                        <span class="btn-icon">📦</span>
+                        <span class="btn-text">Small Payload</span>
+                        <span class="btn-shortcut">Channel 4</span>
+                    </button>
+
+                    <button class="control-btn release-payload-btn" id="release-payload-btn" title="Release main payload (Ctrl+P)">
+                        <span class="btn-icon">📦</span>
+                        <span class="btn-text">Release Payload</span>
+                        <span class="btn-shortcut"><kbd>Ctrl</kbd>+<kbd>P</kbd></span>
+                    </button>
+
+                    <button class="control-btn spray-water-btn" id="spray-water-btn" title="Hold to spray water (Ctrl+W)">
+                        <span class="btn-icon">💧</span>
+                        <span class="btn-text">Spray Water</span>
+                        <span class="btn-shortcut">Hold · <kbd>Ctrl</kbd>+<kbd>W</kbd></span>
+                    </button>
+                </div>
+            </footer>
         </div>
 
-        <!-- Mission Two Mode -->
         <div class="mode-panel" id="mode-mission-two" role="tabpanel" aria-labelledby="tab-mission-two" hidden>
             <main class="main-content">
                 <div class="mode-placeholder">
@@ -120,7 +117,6 @@
             </main>
         </div>
 
-        <!-- Toast Notifications -->
         <div id="toast-container" class="toast-container" aria-live="polite"></div>
     </div>
 
