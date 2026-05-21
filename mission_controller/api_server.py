@@ -784,6 +784,55 @@ def get_status():
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
+@app.route('/gimbal/set', methods=['POST'])
+def gimbal_set():
+    """
+    Gimbal control endpoint.
+
+    POST /gimbal/set
+    {
+        "yaw_pwm": 1500,
+        "pitch_pwm": 1500,
+        "yaw_channel": 8,
+        "pitch_channel": 9
+    }
+    """
+
+    if not px4_interface:
+        return jsonify({
+            'success': False,
+            'error': 'PX4 interface not initialized'
+        }), 503
+
+    try:
+        data = request.get_json(silent=True) or {}
+
+        yaw_pwm = data.get('yaw_pwm', 1500)
+        pitch_pwm = data.get('pitch_pwm', 1500)
+
+        # PLACEHOLDER CHANNELS.
+        # Update after confirming real servo output ports.
+        yaw_channel = data.get('yaw_channel', 8)
+        pitch_channel = data.get('pitch_channel', 9)
+
+        success = px4_interface.set_gimbal(
+            yaw_pwm=yaw_pwm,
+            pitch_pwm=pitch_pwm,
+            yaw_channel=yaw_channel,
+            pitch_channel=pitch_channel,
+        )
+
+        return jsonify({
+            'success': success,
+            'yaw_pwm': yaw_pwm,
+            'pitch_pwm': pitch_pwm,
+            'yaw_channel': yaw_channel,
+            'pitch_channel': pitch_channel,
+        })
+
+    except Exception as e:
+        print(f"[API] Error in gimbal_set: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
 
 def main():
     """Main entry point."""

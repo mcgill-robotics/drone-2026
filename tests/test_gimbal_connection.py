@@ -3,115 +3,137 @@ test_gimbal_connection.py
 
 Purpose:
 --------
-Basic hardware bring-up test.
+Basic API-based gimbal bring-up test.
 
-Use this BEFORE integrating with:
----------------------------------
-- PX4
-- MAVROS
-- mission controller
-- autonomy logic
-- object detection
+This script does NOT directly talk to the servo motors.
 
-Current goal:
--------------
-Verify:
-- serial connection works
-- commands are transmitted
-- motors respond correctly
+Instead, the flow is:
 
-IMPORTANT:
------------
-Run WITHOUT propellers / dangerous hardware states
-during early testing whenever possible.
+    test_gimbal_connection.py
+        -> HTTP POST request
+        -> api_server.py
+        -> px4_interface.set_gimbal()
+        -> PX4/MAVROS servo command
+        -> PX4 servo output channels
+        -> two gimbal servos
+
+Use this script to verify:
+--------------------------
+1. api_server.py is running
+2. /gimbal/set endpoint works
+3. PX4/MAVROS accepts servo commands
+4. The yaw servo responds
+5. The pitch servo responds
+
+Run order:
+----------
+Terminal 1:
+    python3 api_server.py --no-boot
+
+Terminal 2:
+    python3 tests/test_gimbal_connection.py
 """
 
-from mission_controller.gimbal_interface import (
-    GimbalConfig,
-    GimbalInterface,
-)
+import time
+import requests
+
+
+# ============================================================
+# API CONFIGURATION
+# ============================================================
+
+# If the API server runs on the same machine:
+API_BASE_URL = "http://127.0.0.1:5000"
+
+# If the API server runs on the Jetson and this script runs from another laptop,
+# replace this with the Jetson IP address, for example:
+#
+# API_BASE_URL = "http://192.168.1.50:5000"
+
+
+# ============================================================
+# SERVO CHANNEL CONFIGURATION
+# ============================================================
+
+# PLACEHOLDER VALUES.
+# These must be updated after checking the actual PX4 output wiring.
+YAW_CHANNEL = 8
+PITCH_CHANNEL = 9
+
+
+# ============================================================
+# PWM CONFIGURATION
+# ============================================================
+
+# 1500 is normally neutral/center for standard servos.
+NEUTRAL_PWM = 1500
+
+# Step used in this automatic test.
+# Start small for safety.
+STEP_PWM = 100
+
+
+def send_gimbal(yaw_pwm, pitch_pwm):
+    """
+    Send one gimbal command to the API server.
+
+    yaw_pwm:
+        PWM value for yaw servo.
+
+    pitch_pwm:
+        PWM value for pitch servo.
+    """
+
+    payload = {
+        "yaw_pwm": yaw_pwm,
+        "pitch_pwm": pitch_pwm,
+        "yaw_channel": YAW_CHANNEL,
+        "pitch_channel": PITCH_CHANNEL,
+    }
+
+    response = requests.post(
+        f"{API_BASE_URL}/gimbal/set",
+        json=payload,
+        timeout=5,
+    )
+
+    print("Status:", response.status_code)
+    print("Response:", response.json())
+
+    return response.ok
 
 
 def main():
+    """
+    Run a simple automatic movement sequence.
 
-    # ========================================================
-    # CONFIGURATION
-    # ========================================================
+    This is useful for first bring-up because it tests each direction once.
+    """
 
-    # IMPORTANT:
-    # Update port after identifying actual device.
-    #
-    # Useful Jetson commands:
-    #
-    #   ls /dev/ttyUSB*
-    #   ls /dev/ttyACM*
-    #   dmesg -w
-    #
-    config = GimbalConfig(
-        port="/dev/ttyUSB0",
-        baudrate=115200,
-    )
+    print("\n--- Center gimbal ---")
+    send_gimbal(NEUTRAL_PWM, NEUTRAL_PWM)
+    time.sleep(1)
 
-    # ========================================================
-    # CREATE INTERFACE
-    # ========================================================
+    print("\n--- Yaw one direction ---")
+    send_gimbal(NEUTRAL_PWM + STEP_PWM, NEUTRAL_PWM)
+    time.sleep(1)
 
-    gimbal = GimbalInterface(config)
+    print("\n--- Yaw opposite direction ---")
+    send_gimbal(NEUTRAL_PWM - STEP_PWM, NEUTRAL_PWM)
+    time.sleep(1)
 
-    # ========================================================
-    # CONNECT
-    # ========================================================
+    print("\n--- Pitch one direction ---")
+    send_gimbal(NEUTRAL_PWM, NEUTRAL_PWM + STEP_PWM)
+    time.sleep(1)
 
-    if not gimbal.connect():
-        print("Failed to connect to gimbal board")
-        return
+    print("\n--- Pitch opposite direction ---")
+    send_gimbal(NEUTRAL_PWM, NEUTRAL_PWM - STEP_PWM)
+    time.sleep(1)
 
-    try:
+    print("\n--- Return to center ---")
+    send_gimbal(NEUTRAL_PWM, NEUTRAL_PWM)
 
-        # ====================================================
-        # BASIC TESTS
-        # ====================================================
-
-        print("\n--- Center ---")
-        gimbal.center()
-
-        print("\n--- Yaw Right ---")
-        gimbal.set_angles(
-            yaw_deg=20,
-            pitch_deg=0,
-        )
-
-        print("\n--- Yaw Left ---")
-        gimbal.set_angles(
-            yaw_deg=-20,
-            pitch_deg=0,
-        )
-
-        print("\n--- Pitch Up ---")
-        gimbal.set_angles(
-            yaw_deg=0,
-            pitch_deg=10,
-        )
-
-        print("\n--- Pitch Down ---")
-        gimbal.set_angles(
-            yaw_deg=0,
-            pitch_deg=-10,
-        )
-
-        print("\n--- Return Center ---")
-        gimbal.center()
-
-        print("\n--- Stop ---")
-        gimbal.stop()
-
-    finally:
-
-        # ====================================================
-        # DISCONNECT
-        # ====================================================
-
-        gimbal.disconnect()
+    print("\nGimbal connection test complete.")
 
 
 if __name__ == "__main__":

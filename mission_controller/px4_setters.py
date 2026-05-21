@@ -1043,3 +1043,56 @@ class PX4Setters:
             pulse_seconds=pulse_seconds,
             timeout=timeout,
         )
+
+    def set_gimbal(self, yaw_pwm=1500, pitch_pwm=1500,
+                yaw_channel=8, pitch_channel=9, timeout=10):
+        """
+        Control 2-servo gimbal through PX4 servo outputs.
+
+        yaw_channel:
+            Servo channel for left/right movement.
+
+        pitch_channel:
+            Servo channel for up/down movement.
+
+        PWM meaning:
+            1500 = neutral / center
+            <1500 = one direction
+            >1500 = opposite direction
+
+        NOTE:
+        Update yaw_channel and pitch_channel based on the real PX4 output ports.
+        """
+
+        print(
+            f"[PX4] Setting gimbal: "
+            f"yaw_ch={yaw_channel}, yaw_pwm={yaw_pwm}, "
+            f"pitch_ch={pitch_channel}, pitch_pwm={pitch_pwm}"
+        )
+
+        yaw_ok = self._send_servo_command(
+            servo_channel=yaw_channel,
+            pwm_value=yaw_pwm,
+            timeout=timeout,
+        )
+
+        pitch_ok = self._send_servo_command(
+            servo_channel=pitch_channel,
+            pwm_value=pitch_pwm,
+            timeout=timeout,
+        )
+
+        return yaw_ok and pitch_ok
+
+
+    def center_gimbal(self, yaw_channel=8, pitch_channel=9, neutral_pwm=1500):
+        """
+        Center both gimbal servos.
+        """
+
+        return self.set_gimbal(
+            yaw_pwm=neutral_pwm,
+            pitch_pwm=neutral_pwm,
+            yaw_channel=yaw_channel,
+            pitch_channel=pitch_channel,
+        )
