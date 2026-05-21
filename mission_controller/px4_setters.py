@@ -284,10 +284,16 @@ class PX4Setters:
             print(f"[PX4] Disarm failed: {str(e)}")
             return False
 
-    def _send_servo_command(self, servo_channel, pwm_value, timeout=10):
-        """Send a MAV_CMD_DO_SET_SERVO command to a single servo channel."""
+    def _send_actuator_command(self, actuator_slot, actuator_value, timeout=10):
+        """Send a MAV_CMD_DO_SET_ACTUATOR command to a PX4 actuator slot.
+
+        PX4 expects the output to be configured as a generic actuator output,
+        such as Peripheral via Actuator Set 1..6 in QGroundControl.
+        actuator_slot is 1-based and selects which of the six actuator values
+        to populate in the command payload.
+        """
         if not self.connected:
-            print("[PX4] Not connected to MAVROS, cannot send servo command")
+            print("[PX4] Not connected to MAVROS, cannot send actuator command")
             return False
 
         if not self.command_long_client.wait_for_service(timeout_sec=5):
@@ -296,29 +302,44 @@ class PX4Setters:
 
         try:
             req = CommandLong.Request()
-            req.command = 183  # MAV_CMD_DO_SET_SERVO
+            req.command = 187  # MAV_CMD_DO_SET_ACTUATOR
             req.confirmation = 0
-            req.param1 = float(servo_channel)
-            req.param2 = float(pwm_value)
-            req.param3 = 0.0
-            req.param4 = 0.0
-            req.param5 = 0.0
-            req.param6 = 0.0
+            actuator_values = [math.nan] * 6
+            index = int(actuator_slot) - 1
+
+            if index < 0 or index >= len(actuator_values):
+                print(f"[PX4] Invalid actuator slot {actuator_slot}; expected 1-6")
+                return False
+
+            actuator_values[index] = float(actuator_value)
+            req.param1 = actuator_values[0]
+            req.param2 = actuator_values[1]
+            req.param3 = actuator_values[2]
+            req.param4 = actuator_values[3]
+            req.param5 = actuator_values[4]
+            req.param6 = actuator_values[5]
             req.param7 = 0.0
 
             future = self.command_long_client.call_async(req)
             start = time.time()
             while not future.done() and (time.time() - start) < timeout:
-                rclpy.spin_once(self, timeout_sec=0.1)
-                time.sleep(0.1)
+                # Do NOT call spin_once here — the api_server's ros_spin_thread
+                # already spins this node. Concurrent spin_once on one node
+                # raises "generator already executing" and wedges the executor.
+                time.sleep(0.02)
 
             if future.done() and future.result() and future.result().success:
                 return True
 
-            print(f"[PX4] Servo command rejected for channel {servo_channel}")
+            if future.done() and future.result():
+                result_code = getattr(future.result(), 'result', 'n/a')
+                print(f"[PX4] Actuator command rejected for slot {actuator_slot} "
+                      f"(value={actuator_value}, MAV_RESULT={result_code})")
+            else:
+                print(f"[PX4] Actuator command timed out for slot {actuator_slot} (value={actuator_value})")
             return False
         except Exception as e:
-            print(f"[PX4] Servo command failed for channel {servo_channel}: {str(e)}")
+            print(f"[PX4] Actuator command failed for slot {actuator_slot}: {str(e)}")
             return False
 
     def _send_actuator_command(self, actuator_index, value, timeout=10):
@@ -999,42 +1020,43 @@ class PX4Setters:
             with self._stream_lock:
                 self._stream_running = False
 
-    def activate_spray(self, servo_channel=3, pwm_value=1900, timeout=10):
+    def activate_spray(self, actuator_slot=1, actuator_value=1.0, timeout=10):
         """
-        Activate spray pump via servo/actuator control.
+        Activate spray pump via PX4 actuator control.
         
-        Sends a MAV_CMD_DO_SET_SERVO command to activate the spray pump motor
-        on the specified servo channel.
+        Sends a MAV_CMD_DO_SET_ACTUATOR command to activate the spray pump
+        on the specified actuator slot.
         
         Args:
-            servo_channel: Servo/PWM channel number (default 3, typically AUX1)
-            pwm_value: PWM value for motor (default 1900 = full on, range 1000-2000)
+            actuator_slot: Actuator slot number (default 1, maps to Actuator Set 1)
+            actuator_value: Normalized actuator value (default 1.0 = on)
             timeout: Service call timeout in seconds
         
         Returns:
             True if command sent successfully, False otherwise
         """
-        print(f"[PX4] Activating spray pump on channel {servo_channel} (PWM: {pwm_value})")
-        if self._send_servo_command(servo_channel, pwm_value, timeout=timeout):
+        print(f"[PX4] Activating spray pump on actuator slot {actuator_slot} (value: {actuator_value})")
+        if self._send_actuator_command(actuator_slot, actuator_value, timeout=timeout):
             print("[PX4] Spray pump activated successfully")
             return True
 
         print("[PX4] Spray activation command rejected")
         return False
 
-    def deactivate_spray(self, servo_channel=3, timeout=10):
+    def deactivate_spray(self, actuator_slot=1, actuator_value=0.0, timeout=10):
         """
-        Deactivate spray pump by setting servo to neutral position.
+        Deactivate spray pump by setting the actuator value to zero.
         
         Args:
-            servo_channel: Servo/PWM channel number (default 3)
+            actuator_slot: Actuator slot number (default 1)
+            actuator_value: Normalized actuator value (default 0.0 = off)
             timeout: Service call timeout in seconds
         
         Returns:
             True if command sent successfully, False otherwise
         """
-        print(f"[PX4] Deactivating spray pump on channel {servo_channel}")
-        if self._send_servo_command(servo_channel, 1500.0, timeout=timeout):
+        print(f"[PX4] Deactivating spray pump on actuator slot {actuator_slot}")
+        if self._send_actuator_command(actuator_slot, actuator_value, timeout=timeout):
             print("[PX4] Spray pump deactivated successfully")
             return True
 

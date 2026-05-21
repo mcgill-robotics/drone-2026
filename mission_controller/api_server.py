@@ -20,7 +20,7 @@ import time
 import threading
 import shutil
 import subprocess
-from flask import Flask, request, jsonify, Response, stream_with_context
+from flask import Flask, request, jsonify, Response, stream_with_context, send_from_directory
 from flask_cors import CORS
 
 try:
@@ -43,8 +43,12 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 _REPO_ROOT = os.path.dirname(_THIS_DIR)
 sys.path.insert(0, _REPO_ROOT)
 
+import math
+
 import rclpy
 from mission_controller.px4_interface import init_px4, boot_px4, stop_px4
+from mission_controller.geo import pixel_to_gps
+from mission_controller.target_registry import TargetRegistry
 
 try:
     from od_bridge2.mission1_od import detect as od_detect, load_calibration as od_load_calibration
@@ -86,16 +90,64 @@ latest_frames = {
 }
 latest_target = None  # detected target dict (or None)
 latest_frame_version = 0
-camera_fx = None  # RealSense color intrinsic, set by capture thread
+# RealSense color intrinsics, set by the capture thread on first frame. fy/ppx/ppy
+# join fx so the pixel -> GPS projection can run with the true principal point
+# instead of guessing image-centre.
+camera_intrinsics = {'fx': None, 'fy': None, 'ppx': None, 'ppy': None}
+# Last gimbal angles commanded through the API, in radians. The georeferencing
+# math assumes the gimbal achieves what was last asked of it (open-loop -- the
+# board has no feedback channel yet). Stays at (0, 0) until /gimbal/aim is hit.
+last_gimbal_cmd = {'yaw_rad': 0.0, 'pitch_rad': 0.0}
 od_calibration = od_load_calibration() if od_load_calibration is not None else None
+target_registry = TargetRegistry(
+    os.path.join(_THIS_DIR, 'target_registry.json'),
+)
+# Screenshots land here, one subfolder per capture (depth.png/rgb.png/od.png).
+SCREENSHOT_DIR = os.path.join(_REPO_ROOT, 'screenshots')
+
+# Depth band the camera can actually be trusted within. The D455's wide baseline
+# puts its minimum range around 0.4 m; readings below this (or beyond the far
+# limit) are noise or the sensor returning 0 for objects too close to resolve.
+# Anything outside the band is treated as no-data: black in the depth view, and
+# measurement refuses instead of reporting a fabricated distance. Override via
+# env if a different lens/model needs a different range.
+DEPTH_VALID_MIN_M = float(os.environ.get('DEPTH_VALID_MIN_M', '0.4'))
+DEPTH_VALID_MAX_M = float(os.environ.get('DEPTH_VALID_MAX_M', '6.0'))
 capture_thread_handle = None
 detection_thread_handle = None
 capture_stop_event = threading.Event()
 
 
+def _build_depth_filters():
+    """RealSense post-processing that fills depth holes for display + measurement.
+
+    Holes are the zero pixels the sensor can't resolve (shiny/edge/low-texture
+    surfaces, occlusions). These run in the DEPTH domain on the already-aligned
+    frame. We deliberately skip the depth<->disparity round-trip: that transform
+    needs the original stereo baseline, which aligning depth to colour strips,
+    so doing it post-align fabricated near-depth values (the scattered red
+    speckle). A gentle spatial smooth plus the hole-filling filter stays clean.
+    Temporal filtering is skipped too — it smears on a moving airframe. Returns
+    None without pyrealsense2.
+    """
+    if rs is None:
+        return None
+    spatial = rs.spatial_filter()
+    spatial.set_option(rs.option.holes_fill, 2)   # bridge small gaps
+    hole_filling = rs.hole_filling_filter()        # fill the rest from neighbours
+    return {'spatial': spatial, 'hole_filling': hole_filling}
+
+
+def _fill_depth_holes(depth_frame, filters):
+    """Spatial smooth + hole fill over one aligned depth frame (depth domain)."""
+    f = filters['spatial'].process(depth_frame)
+    return filters['hole_filling'].process(f).as_depth_frame()
+
+
 def _capture_loop():
     """Single owner of the camera. Just grabs frames at camera rate — no detection."""
-    global latest_frame_version, camera_fx
+    global latest_frame_version
+    depth_filters = _build_depth_filters()
     while not capture_stop_event.is_set():
         try:
             rgb_frame = None
@@ -112,22 +164,52 @@ def _capture_loop():
                     color = aligned.get_color_frame()
                     if color:
                         rgb_frame = np.asanyarray(color.get_data())
-                        if camera_fx is None:
+                        if camera_intrinsics['fx'] is None:
                             try:
-                                vp = color.profile.as_video_stream_profile()
-                                camera_fx = vp.get_intrinsics().fx
-                                print(f'[API] RealSense color fx={camera_fx:.1f}')
+                                intr = color.profile.as_video_stream_profile().get_intrinsics()
+                                camera_intrinsics['fx'] = intr.fx
+                                camera_intrinsics['fy'] = intr.fy
+                                camera_intrinsics['ppx'] = intr.ppx
+                                camera_intrinsics['ppy'] = intr.ppy
+                                print(f'[API] RealSense color intrinsics fx={intr.fx:.1f} '
+                                      f'fy={intr.fy:.1f} ppx={intr.ppx:.1f} ppy={intr.ppy:.1f}')
                             except Exception:
                                 pass
 
                     depth = aligned.get_depth_frame()
                     if depth:
-                        depth_raw = np.asanyarray(depth.get_data())
-                        depth_metric = depth_raw.astype(np.float32) * depth.get_units()
-                        scaled = cv2.convertScaleAbs(depth_raw, alpha=0.03)
+                        units = depth.get_units()
+
+                        # MEASUREMENT depth: the RAW sensor reading only — never
+                        # the hole-filler's guesses — clamped to the band the
+                        # D455 can trust. Out-of-band (too close / too far) -> 0,
+                        # so a click there is refused rather than handed a
+                        # fabricated number. _deproject's window still bridges the
+                        # small holes; large no-data regions stay unmeasurable.
+                        raw_arr = np.asanyarray(depth.get_data())
+                        depth_metric = raw_arr.astype(np.float32) * units
+                        depth_metric[(depth_metric < DEPTH_VALID_MIN_M) |
+                                     (depth_metric > DEPTH_VALID_MAX_M)] = 0.0
+
+                        # DISPLAY depth: hole-fill for a smooth picture, then
+                        # paint anything with no trustworthy reading (an
+                        # unrecoverable hole, or depth outside the valid band)
+                        # black — JET maps 0 -> dark red, which would otherwise
+                        # read as a phantom near surface.
+                        disp = depth
+                        if depth_filters is not None:
+                            try:
+                                disp = _fill_depth_holes(depth, depth_filters)
+                            except Exception as e:
+                                print(f'[API] Depth hole-filling skipped: {e}')
+                        disp_arr = np.asanyarray(disp.get_data())
+                        disp_metric = disp_arr.astype(np.float32) * units
+                        scaled = cv2.convertScaleAbs(disp_arr, alpha=0.03)
                         depth_colormap = cv2.applyColorMap(
                             cv2.bitwise_not(scaled), cv2.COLORMAP_JET
                         )
+                        depth_colormap[(disp_metric < DEPTH_VALID_MIN_M) |
+                                       (disp_metric > DEPTH_VALID_MAX_M)] = (0, 0, 0)
                 else:
                     ok, frame = state['capture'].read()
                     if ok:
@@ -145,6 +227,60 @@ def _capture_loop():
         except Exception as e:
             print(f'[API] Capture loop error: {e}')
             time.sleep(0.1)
+
+
+def _quat_to_euler(qx, qy, qz, qw):
+    """Quaternion -> (roll, pitch, yaw) in radians. ZYX intrinsic convention."""
+    sinr_cosp = 2.0 * (qw * qx + qy * qz)
+    cosr_cosp = 1.0 - 2.0 * (qx * qx + qy * qy)
+    roll = math.atan2(sinr_cosp, cosr_cosp)
+    sinp = 2.0 * (qw * qy - qz * qx)
+    pitch = math.copysign(math.pi / 2, sinp) if abs(sinp) >= 1 else math.asin(sinp)
+    siny_cosp = 2.0 * (qw * qz + qx * qy)
+    cosy_cosp = 1.0 - 2.0 * (qy * qy + qz * qz)
+    yaw = math.atan2(siny_cosp, cosy_cosp)
+    return roll, pitch, yaw
+
+
+def _estimate_target_gps(stats):
+    """Project the detected centroid to lat/lon using current drone telemetry.
+
+    Returns (lat_deg, lon_deg) or None if anything required is missing:
+      - depth at the centroid (no depth -> no scale)
+      - the RealSense intrinsics (set by the first frame in _capture_loop)
+      - a GPS fix on the drone (no anchor -> can't georeference)
+      - drone attitude (no orientation -> ray direction unknown)
+    """
+    if px4_interface is None:
+        return None
+    dist = stats.get('distance')
+    cx, cy = stats.get('centroid') or (None, None)
+    fx = camera_intrinsics['fx']
+    fy = camera_intrinsics['fy']
+    ppx = camera_intrinsics['ppx']
+    ppy = camera_intrinsics['ppy']
+    if None in (dist, cx, cy, fx, fy, ppx, ppy):
+        return None
+
+    gps = px4_interface.get_gps_location()
+    if not gps:
+        return None
+
+    # Use the IMU attitude (the same source the controller trusts for yaw).
+    att = getattr(px4_interface, 'current_attitude', None)
+    if not att:
+        return None
+    q = att.orientation
+    roll, pitch, yaw = _quat_to_euler(q.x, q.y, q.z, q.w)
+
+    return pixel_to_gps(
+        px=float(cx), py=float(cy), depth_m=float(dist),
+        fx=fx, fy=fy, ppx=ppx, ppy=ppy,
+        drone_lat=gps['latitude'], drone_lon=gps['longitude'],
+        drone_roll=roll, drone_pitch=pitch, drone_yaw=yaw,
+        gimbal_yaw=last_gimbal_cmd['yaw_rad'],
+        gimbal_pitch=last_gimbal_cmd['pitch_rad'],
+    )
 
 
 def _serialize_target(stats):
@@ -165,7 +301,106 @@ def _serialize_target(stats):
     diam = stats.get('real_diameter')
     if diam is not None:
         payload['diameter_m'] = float(diam)
+    gps_est = _estimate_target_gps(stats)
+    if gps_est is not None:
+        payload['lat'] = gps_est[0]
+        payload['lon'] = gps_est[1]
+        # Look the target up in the registry. Same physical target seen again
+        # (within MATCH_RADIUS_M) reuses its id; everything else gets a new one.
+        # Without GPS we have no key, so the bbox renders without an id rather
+        # than misattributing a new sighting to an unrelated cached target.
+        payload['id'] = target_registry.assign(
+            gps_est[0], gps_est[1], wetness=payload.get('wetness') or None,
+        )
     return payload
+
+
+def _draw_od_overlay(frame, target):
+    """Draw the live OD view's overlay (status pill, bbox, centroid, label)
+    onto an RGB frame in source pixel coords.
+
+    `target` is the serialized latest_target payload (or None). Mirrors the
+    client-side drawDetections() in manual_controller/main.js so the saved
+    od.png matches what the operator sees on screen. No scaling/letterboxing
+    is needed here: we draw straight onto the full 640x480 source frame.
+    """
+    font = cv2.FONT_HERSHEY_SIMPLEX
+    locked = target is not None
+
+    # Status pill, top-left — always shown so the view reads as "OD" even with
+    # nothing locked. Colours are BGR (orange for wet, green for dry/locked).
+    badge = 'OD - LOCKED' if locked else 'OD - scanning'
+    (tw, th), _ = cv2.getTextSize(badge, font, 0.5, 1)
+    cv2.rectangle(frame, (8, 8), (8 + tw + 12, 8 + th + 10),
+                  (60, 180, 0) if locked else (40, 40, 40), -1)
+    cv2.putText(frame, badge, (14, 8 + th + 4), font, 0.5, (255, 255, 255), 1)
+
+    if not target:
+        return
+
+    wet = target.get('wetness') == 'wet'
+    color = (0, 128, 255) if wet else (68, 204, 0)  # orange / green, BGR
+
+    b = target['bbox']
+    x, y, w, h = b['x'], b['y'], b['w'], b['h']
+    cv2.rectangle(frame, (x, y), (x + w, y + h), color, 2)
+
+    centroid = target.get('centroid')
+    if centroid:
+        cv2.circle(frame, (centroid['x'], centroid['y']), 4, (64, 64, 255), -1)
+
+    id_tag = f"#{target['id']} " if isinstance(target.get('id'), int) else ''
+    wet_label = (target.get('wetness') or 'target').upper()
+    lines = [f"{id_tag}{wet_label}"]
+    dist = target.get('distance_m')
+    if isinstance(dist, (int, float)):
+        diam = target.get('diameter_m')
+        diam_str = f"  ~{round(diam * 100)} cm" if isinstance(diam, (int, float)) else ''
+        lines.append(f"{dist:.2f} m{diam_str}")
+    lat, lon = target.get('lat'), target.get('lon')
+    if isinstance(lat, (int, float)) and isinstance(lon, (int, float)):
+        lines.append(f"{lat:.6f}, {lon:.6f}")
+
+    # Label block above the box, dropped below if it would clip the top edge.
+    line_h, pad = 18, 5
+    text_w = max(cv2.getTextSize(l, font, 0.5, 1)[0][0] for l in lines)
+    box_w = text_w + pad * 2
+    box_h = line_h * len(lines) + pad * 2
+    lx = x
+    ly = y - box_h - 2
+    if ly < 0:
+        ly = y + 2
+    cv2.rectangle(frame, (lx, ly), (lx + box_w, ly + box_h), color, -1)
+    for i, line in enumerate(lines):
+        cv2.putText(frame, line, (lx + pad, ly + pad + line_h * (i + 1) - 5),
+                    font, 0.5, (255, 255, 255), 1)
+
+
+def _deproject(u, v, depth_m, intr):
+    """Pixel (u, v) + metric depth -> ((X, Y, Z) camera-space metres, Z), or None.
+
+    Grows the sampling window until it finds valid depth, so a click that lands
+    in a hole (a zero pixel the sensor couldn't resolve) still resolves to the
+    nearest real surface instead of failing. Returns None only if the whole
+    frame has no depth at all. Pinhole model, distortion ignored — good enough
+    for an on-screen estimate.
+    """
+    h, w = depth_m.shape[:2]
+    if not (0 <= u < w and 0 <= v < h):
+        return None
+    z = None
+    for half in (4, 8, 16, 32, 64):
+        win = depth_m[max(0, v - half):min(h, v + half + 1),
+                      max(0, u - half):min(w, u + half + 1)]
+        valid = win[win > 0]
+        if valid.size:
+            z = float(np.median(valid))
+            break
+    if z is None:
+        return None
+    x = (u - intr['ppx']) / intr['fx'] * z
+    y = (v - intr['ppy']) / intr['fy'] * z
+    return (x, y, z), z
 
 
 def _detection_loop():
@@ -210,7 +445,7 @@ def _detection_loop():
 
             _frame, _mask, stats = od_detect(
                 rgb_copy, od_calibration,
-                depth_m=depth_copy, fx=camera_fx,
+                depth_m=depth_copy, fx=camera_intrinsics['fx'],
                 prev_centroid=prev_centroid, draw=False,
             )
 
@@ -293,11 +528,16 @@ def _run_mediamtx():
     if os.path.isfile(mediamtx_config):
         mediamtx_cmd.append(mediamtx_config)
 
+    # MediaMTX logs to stdout, so capture both streams. Write to a file rather
+    # than a PIPE: a PIPE we never drain would eventually block the long-running
+    # process, and a file keeps the startup error around for diagnosis.
+    mediamtx_log_path = os.path.join(_REPO_ROOT, 'mediamtx.log')
     try:
+        mediamtx_log = open(mediamtx_log_path, 'w')
         mediamtx_process = subprocess.Popen(
             mediamtx_cmd,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.PIPE,
+            stdout=mediamtx_log,
+            stderr=subprocess.STDOUT,
             text=True,
         )
         time.sleep(1.0)
@@ -306,8 +546,12 @@ def _run_mediamtx():
             print('[API] MediaMTX started on the default RTSP/WebRTC ports')
             return True
 
-        stderr = mediamtx_process.stderr.read() if mediamtx_process.stderr else ''
-        print(f'[API] MediaMTX failed to start: {stderr.strip()}')
+        try:
+            with open(mediamtx_log_path) as f:
+                output = f.read().strip()
+        except OSError:
+            output = ''
+        print(f'[API] MediaMTX failed to start: {output or f"(no output; see {mediamtx_log_path})"}')
         mediamtx_process = None
         return False
     except Exception as e:
@@ -558,8 +802,8 @@ def spray_control():
     POST /spray
     {
         "action": "activate" | "deactivate",
-        "channel": 3,        // Optional: servo channel (default 3)
-        "pwm": 1900         // Optional: PWM value for activate (default 1900)
+        "channel": 1,        // Optional: actuator slot (default 1 for Actuator Set 1)
+        "value": 1.0         // Optional: normalized actuator value for activate (default 1.0)
     }
     """
     if not px4_interface:
@@ -568,21 +812,22 @@ def spray_control():
     try:
         data = request.get_json()
         action = data.get('action', '').lower()
-        channel = data.get('channel', 3)
-        pwm = data.get('pwm', 1900)
+        channel = data.get('channel', 1)
+        value = data.get('value', data.get('pwm', 1.0))
         
         if action == 'activate':
-            success = px4_interface.activate_spray(servo_channel=channel, pwm_value=pwm)
+            print(channel, value)
+            success = px4_interface.activate_spray(actuator_slot=channel, actuator_value=value)
             return jsonify({
                 'success': success,
                 'action': 'activate',
                 'channel': channel,
-                'pwm': pwm,
+                'value': value,
                 'message': 'Spray activated' if success else 'Spray activation failed'
             })
         
         elif action == 'deactivate':
-            success = px4_interface.deactivate_spray(servo_channel=channel)
+            success = px4_interface.deactivate_spray(actuator_slot=channel)
             return jsonify({
                 'success': success,
                 'action': 'deactivate',
@@ -657,6 +902,204 @@ def detection_stream():
         mimetype='text/event-stream',
         headers={'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no'},
     )
+
+
+@app.route('/camera/screenshot', methods=['POST'])
+def camera_screenshot():
+    """Capture the current depth, rgb and OD views into one subfolder.
+
+    POST /camera/screenshot  (no body)
+    -> { success, folder, files: {depth, rgb, od}, target }
+
+    Each call drops a new timestamped subfolder under screenshots/ holding
+    depth.png (depth colormap), rgb.png (color frame) and od.png (the color
+    frame with the live detection overlay baked in).
+    """
+    if cv2 is None:
+        return jsonify({'success': False, 'error': 'OpenCV not available'}), 503
+
+    # Snapshot every view under the lock so they all come from the same instant.
+    with frame_buffer_lock:
+        rgb = latest_frames.get('rgb')
+        depth = latest_frames.get('depth')
+        depth_m = latest_frames.get('depth_m')
+        rgb = rgb.copy() if rgb is not None else None
+        depth = depth.copy() if depth is not None else None
+        depth_m = depth_m.copy() if depth_m is not None else None
+        target = dict(latest_target) if latest_target else None
+
+    if rgb is None and depth is None:
+        return jsonify({'success': False,
+                        'error': 'No camera frames available yet'}), 503
+
+    # One subfolder per capture; append a counter if two land in the same second.
+    stamp = time.strftime('%Y%m%d_%H%M%S')
+    subdir = os.path.join(SCREENSHOT_DIR, stamp)
+    suffix = 1
+    while os.path.exists(subdir):
+        subdir = os.path.join(SCREENSHOT_DIR, f'{stamp}_{suffix}')
+        suffix += 1
+    os.makedirs(subdir, exist_ok=True)
+
+    files = {}
+    if depth is not None:
+        cv2.imwrite(os.path.join(subdir, 'depth.png'), depth)
+        files['depth'] = 'depth.png'
+    if rgb is not None:
+        cv2.imwrite(os.path.join(subdir, 'rgb.png'), rgb)
+        files['rgb'] = 'rgb.png'
+        od = rgb.copy()
+        _draw_od_overlay(od, target)
+        cv2.imwrite(os.path.join(subdir, 'od.png'), od)
+        files['od'] = 'od.png'
+
+    # Persist the metric depth + intrinsics so the capture is self-contained for
+    # later distance measurement (pixel -> camera-space deprojection). Aligned
+    # to color, so depth_m[y, x] corresponds to rgb.png pixel (x, y).
+    intr = {k: camera_intrinsics[k] for k in ('fx', 'fy', 'ppx', 'ppy')}
+    measurable = depth_m is not None and np is not None and intr['fx'] is not None
+    if measurable:
+        np.save(os.path.join(subdir, 'depth.npy'), depth_m)
+        with open(os.path.join(subdir, 'intrinsics.json'), 'w') as f:
+            json.dump(intr, f)
+
+    print(f'[API] Screenshot saved to {subdir} ({", ".join(files)})')
+    return jsonify({
+        'success': True,
+        'folder': subdir,
+        'name': os.path.basename(subdir),
+        'files': files,
+        'target': target is not None,
+        'measurable': measurable,
+    })
+
+
+@app.route('/camera/screenshots/<name>/<path:filename>', methods=['GET'])
+def camera_screenshot_file(name, filename):
+    """Serve a saved screenshot file (rgb.png/depth.png/od.png) for display.
+
+    os.path.basename strips any traversal in `name`; send_from_directory does
+    the same for `filename`.
+    """
+    directory = os.path.join(SCREENSHOT_DIR, os.path.basename(name))
+    if not os.path.isdir(directory):
+        return jsonify({'success': False, 'error': 'No such capture'}), 404
+    return send_from_directory(directory, filename)
+
+
+@app.route('/camera/measure', methods=['POST'])
+def camera_measure():
+    """Estimate the real-world distance between two pixels in a capture.
+
+    POST /camera/measure
+    { "name": "<capture folder>", "p1": {"x":.., "y":..}, "p2": {"x":.., "y":..} }
+    -> { success, distance_m, p1:{x,y,depth_m}, p2:{x,y,depth_m} }
+
+    Deprojects each pixel to camera-space XYZ using the capture's saved metric
+    depth and intrinsics, then returns the Euclidean distance between them.
+    """
+    if np is None:
+        return jsonify({'success': False, 'error': 'NumPy not available'}), 503
+
+    data = request.get_json(silent=True) or {}
+    name = os.path.basename(str(data.get('name', '')))
+    subdir = os.path.join(SCREENSHOT_DIR, name)
+    depth_path = os.path.join(subdir, 'depth.npy')
+    intr_path = os.path.join(subdir, 'intrinsics.json')
+    if not name or not os.path.isfile(depth_path) or not os.path.isfile(intr_path):
+        return jsonify({'success': False,
+                        'error': 'Capture has no depth/intrinsics to measure'}), 404
+
+    try:
+        p1, p2 = data['p1'], data['p2']
+        u1, v1 = int(round(p1['x'])), int(round(p1['y']))
+        u2, v2 = int(round(p2['x'])), int(round(p2['y']))
+    except (KeyError, TypeError, ValueError):
+        return jsonify({'success': False,
+                        'error': 'p1 and p2 with x,y are required'}), 400
+
+    depth_m = np.load(depth_path)
+    with open(intr_path) as f:
+        intr = json.load(f)
+
+    a = _deproject(u1, v1, depth_m, intr)
+    b = _deproject(u2, v2, depth_m, intr)
+    if a is None or b is None:
+        which = [name for name, pt in (('point 1', a), ('point 2', b)) if pt is None]
+        return jsonify({
+            'success': False,
+            'error': (f"No valid depth at {' and '.join(which)} — too close or out of "
+                      f"range (trusted band {DEPTH_VALID_MIN_M:.1f}–{DEPTH_VALID_MAX_M:.1f} m; "
+                      f"the D455 can't read closer than ~0.4 m)."),
+        }), 422
+
+    dist = float(np.linalg.norm(np.array(a[0]) - np.array(b[0])))
+    return jsonify({
+        'success': True,
+        'distance_m': dist,
+        'p1': {'x': u1, 'y': v1, 'depth_m': a[1]},
+        'p2': {'x': u2, 'y': v2, 'depth_m': b[1]},
+    })
+
+
+@app.route('/camera/captures', methods=['GET'])
+def camera_captures():
+    """List saved captures, newest first, for the gallery page.
+
+    Each entry reports which view images exist, whether it carries the depth +
+    intrinsics needed for measurement, and whether a notes.txt is present.
+    """
+    if not os.path.isdir(SCREENSHOT_DIR):
+        return jsonify({'success': True, 'captures': []})
+
+    captures = []
+    for name in os.listdir(SCREENSHOT_DIR):
+        subdir = os.path.join(SCREENSHOT_DIR, name)
+        if not os.path.isdir(subdir):
+            continue
+        files = {view: fn for view, fn in
+                 (('rgb', 'rgb.png'), ('depth', 'depth.png'), ('od', 'od.png'))
+                 if os.path.isfile(os.path.join(subdir, fn))}
+        captures.append({
+            'name': name,
+            'files': files,
+            'measurable': (os.path.isfile(os.path.join(subdir, 'depth.npy')) and
+                           os.path.isfile(os.path.join(subdir, 'intrinsics.json'))),
+            'has_notes': os.path.isfile(os.path.join(subdir, 'notes.txt')),
+            'mtime': os.path.getmtime(subdir),
+        })
+
+    captures.sort(key=lambda c: c['mtime'], reverse=True)
+    return jsonify({'success': True, 'captures': captures})
+
+
+@app.route('/camera/captures/<name>/notes', methods=['GET', 'POST'])
+def camera_capture_notes(name):
+    """Read (GET) or write (POST {notes}) the per-capture notes.txt.
+
+    The text file lives inside the capture's own subfolder, so notes travel
+    with the images.
+    """
+    subdir = os.path.join(SCREENSHOT_DIR, os.path.basename(name))
+    if not os.path.isdir(subdir):
+        return jsonify({'success': False, 'error': 'No such capture'}), 404
+    notes_path = os.path.join(subdir, 'notes.txt')
+
+    if request.method == 'GET':
+        notes = ''
+        if os.path.isfile(notes_path):
+            with open(notes_path, encoding='utf-8') as f:
+                notes = f.read()
+        return jsonify({'success': True, 'notes': notes})
+
+    data = request.get_json(silent=True) or {}
+    notes = data.get('notes', '')
+    if not isinstance(notes, str):
+        return jsonify({'success': False, 'error': 'notes must be a string'}), 400
+    with open(notes_path, 'w', encoding='utf-8') as f:
+        f.write(notes)
+    print(f'[API] Saved notes for capture {os.path.basename(name)} ({len(notes)} chars)')
+    return jsonify({'success': True})
 
 
 @app.route('/payload/release', methods=['POST'])
@@ -791,6 +1234,33 @@ def payload_small_control():
         })
     except Exception as e:
         print(f"[API] Error in payload_small_control: {e}")
+@app.route('/gimbal/aim', methods=['POST'])
+def gimbal_aim():
+    """Record the gimbal's commanded angles for georeferencing.
+
+    POST /gimbal/aim
+    {
+        "yaw_deg": 0.0,    // 0 = forward, + = right (about body-down)
+        "pitch_deg": 0.0   // 0 = level, + = nose up
+    }
+
+    NOTE: this only updates the angles the GPS projection uses. Wire the actual
+    serial command through GimbalInterface.set_angles separately; until the
+    board has a feedback channel, we trust commanded == achieved.
+    """
+    try:
+        data = request.get_json(silent=True) or {}
+        yaw_deg = float(data.get('yaw_deg', 0.0))
+        pitch_deg = float(data.get('pitch_deg', 0.0))
+        last_gimbal_cmd['yaw_rad'] = math.radians(yaw_deg)
+        last_gimbal_cmd['pitch_rad'] = math.radians(pitch_deg)
+        return jsonify({
+            'success': True,
+            'yaw_deg': yaw_deg,
+            'pitch_deg': pitch_deg,
+        })
+    except Exception as e:
+        print(f"[API] Error in gimbal_aim: {e}")
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
@@ -1056,8 +1526,15 @@ def main():
         if args.sitl:
             fcu_url = "udp://127.0.0.1:14540"
         else:
-            fcu_url = "serial:///dev/ttyTHS1:921600"
-    
+            # fcu_url = "serial:///dev/ttyTHS1:921600"
+            # Bind locally on 0.0.0.0:14550 (the port the FCU broadcasts MAVLink
+            # to) and send commands back to the FCU at 192.168.144.10:14550.
+            # Grammar: udp://[bind_host]:[bind_port]@[remote_host]:[remote_port].
+            # The old "udp://@14550:14550" left the bind side (before '@') empty,
+            # so MAVROS bound its default port (14555) instead of 14550 and never
+            # saw the heartbeat. Drop the remote half (use "udp://0.0.0.0:14550@")
+            # to auto-learn the FCU address if its IP isn't fixed.
+            fcu_url = "udp://0.0.0.0:14550@192.168.144.10:14550"
     print(f"[API] Starting API server...")
     print(f"[API] Port: {args.port}")
     print(f"[API] FCU URL: {fcu_url}")
@@ -1107,6 +1584,7 @@ def main():
         print("\n[API] Shutting down...")
     finally:
         _stop_camera_streams()
+        target_registry.flush()
         stop_px4()
 
 
