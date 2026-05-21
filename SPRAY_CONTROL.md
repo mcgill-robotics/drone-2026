@@ -5,10 +5,10 @@ This document describes the implementation of the spray mechanic for the drone c
 ## Overview
 
 The spray control system is implemented using a **pushbutton mechanic** where:
-- **Hold down the button** → Spray pump activates (PWM set to 1900)
-- **Release the button** → Spray pump deactivates (PWM set to 1500/neutral)
+- **Hold down the button** → Spray pump activates (actuator value set to 1.0)
+- **Release the button** → Spray pump deactivates (actuator value set to 0.0)
 
-The system communicates via HTTP API with a Flask backend that sends servo commands to the PX4 flight controller through MAVROS.
+The system communicates via HTTP API with a Flask backend that sends PX4 actuator commands to the flight controller through MAVROS.
 
 ## Architecture
 
@@ -20,8 +20,8 @@ The system communicates via HTTP API with a Flask backend that sends servo comma
 │  - styles.css (UI styling)                             │
 └──────────────┬──────────────────────────────────────────┘
                │
-               │ HTTP POST /spray
-               │ (JSON: {"action": "activate|deactivate", "channel": 3})
+              │ HTTP POST /spray
+              │ (JSON: {"action": "activate|deactivate", "channel": 1, "value": 1.0})
                ▼
 ┌──────────────────────────────────────────────────────────┐
 │ mission_controller/api_server.py (Flask HTTP Server)     │
@@ -38,21 +38,21 @@ The system communicates via HTTP API with a Flask backend that sends servo comma
 │  - activate_spray() / deactivate_spray() methods        │
 └──────────────┬──────────────────────────────────────────┘
                │
-               │ MAV_CMD_DO_SET_SERVO
+               │ MAV_CMD_DO_SET_ACTUATOR
                │ command_long_client.call_async()
                ▼
 ┌──────────────────────────────────────────────────────────┐
 │ MAVROS (ROS 2 ↔ Flight Controller)                       │
 │  - /mavros/cmd/command service                           │
-│  - Sends servo commands to PX4 autopilot                │
+│  - Sends actuator commands to PX4 autopilot             │
 └──────────────┬──────────────────────────────────────────┘
                │
                ▼
 ┌──────────────────────────────────────────────────────────┐
 │ PX4 Flight Controller                                    │
-│  - Receives MAV_CMD_DO_SET_SERVO                         │
-│  - Controls servo/motor on specified channel             │
-│  - Channel 3 = AUX1 (typically spray pump motor)        │
+│  - Receives MAV_CMD_DO_SET_ACTUATOR                     │
+│  - Controls outputs mapped to Actuator Set 1..6         │
+│  - Use Peripheral via Actuator Set 1 for the sprayer     │
 └──────────────────────────────────────────────────────────┘
 ```
 
@@ -64,18 +64,18 @@ The system communicates via HTTP API with a Flask backend that sends servo comma
 
 Added two new methods:
 
-#### `activate_spray(servo_channel=3, pwm_value=1900, timeout=10)`
-Activates the spray pump by sending a servo command.
-- **servo_channel**: Servo/PWM channel (3 = AUX1 by default)
-- **pwm_value**: PWM signal (1900 = full on)
+#### `activate_spray(actuator_slot=1, actuator_value=1.0, timeout=10)`
+Activates the spray pump by sending a PX4 actuator command.
+- **actuator_slot**: Actuator slot (1 = Actuator Set 1 by default)
+- **actuator_value**: Normalized actuator value (1.0 = on)
 - **Returns**: True on success, False on failure
 
-#### `deactivate_spray(servo_channel=3, timeout=10)`
-Deactivates the spray pump by setting servo to neutral.
-- **pwm_value**: 1500 (neutral/off position)
+#### `deactivate_spray(actuator_slot=1, actuator_value=0.0, timeout=10)`
+Deactivates the spray pump by setting the actuator value to zero.
+- **actuator_value**: Normalized actuator value (0.0 = off)
 - **Returns**: True on success, False on failure
 
-Also updated `px4_getters.py` to include the `CommandLong` service client for sending servo commands.
+Also updated `px4_getters.py` to include the `CommandLong` service client for sending actuator commands.
 
 ### 2. Backend: API Server
 
@@ -90,16 +90,16 @@ A lightweight Flask HTTP server that provides endpoints for the UI to control dr
 Request:
 {
     "action": "activate" | "deactivate",
-    "channel": 3,    // Optional: servo channel (default 3)
-    "pwm": 1900      // Optional: PWM value for activate (default 1900)
+    "channel": 1,    // Optional: actuator slot (default 1 for Actuator Set 1)
+    "value": 1.0     // Optional: normalized actuator value for activate (default 1.0)
 }
 
 Response:
 {
     "success": true,
     "action": "activate",
-    "channel": 3,
-    "pwm": 1900,
+   "channel": 1,
+   "value": 1.0,
     "message": "Spray activated"
 }
 ```
@@ -145,9 +145,9 @@ Implemented **pushbutton mechanics** with the following features:
 let sprayState = {
     isActive: false,
     isPushbuttonMode: true,  // Hold to spray
-    channel: 3,              // Servo channel
-    pwmOn: 1900,            // Active PWM
-    pwmOff: 1500            // Neutral PWM
+  channel: 1,              // Actuator slot
+  valueOn: 1.0,            // Active actuator value
+  valueOff: 0.0            // Inactive actuator value
 };
 ```
 
@@ -209,7 +209,11 @@ pip install flask flask-cors
 ros2 launch mavros px4.launch fcu_url:="udp://127.0.0.1:14540"
 
 # For Hardware
-ros2 launch mavros apm.launch fcu_url:="serial:///dev/ttyTHS1:921600"
+ros2 launch mavros px4.launch fcu_url:="serial:///dev/ttyTHS1:921600"
+
+In QGroundControl, map the sprayer output to `Peripheral via Actuator Set 1`
+instead of `RC AUX1`. PX4 will reject the command if the output is still bound
+to an RC passthrough or motor function.
 ```
 
 3. **Start the API server:**
@@ -225,35 +229,34 @@ Open manual_controller/index.html in a web browser
 
 ## Configuration
 
-### Servo Channel
-The default servo channel is **3 (AUX1)**. To change it:
+### Actuator Slot
+The default actuator slot is **1 (Actuator Set 1)**. To change it:
 
 **Backend:**
 ```python
 # In api_server.py, modify the POST /spray endpoint:
-channel = data.get('channel', 3)  # Change default here
+channel = data.get('channel', 1)  # Change default here
 ```
 
 **Frontend:**
 ```javascript
 // In main.js, modify sprayState:
-sprayState.channel = 3;  // Change to your servo channel
+sprayState.channel = 1;  // Change to your actuator slot
 ```
 
-### PWM Values
-Customize PWM values for your servo/motor:
+### Actuator Values
+Customize actuator values for your sprayer:
 
 ```javascript
 // In main.js, sprayState:
-pwmOn: 1900,   // PWM when spray is active (range 1000-2000)
-pwmOff: 1500   // PWM when spray is off (neutral)
+valueOn: 1.0,   // Actuator value when spray is active
+valueOff: 0.0   // Actuator value when spray is off
 ```
 
-**Common PWM ranges:**
-- 1000-1500: Reduced speed
-- 1500: Neutral/Off
-- 1500-2000: Increasing speed
-- 1900: Full speed (typically)
+**Common actuator values:**
+- 0.0: Off
+- 1.0: Full on
+- -1.0..1.0: Normalized control range if your output function supports it
 
 ### Button Behavior Mode
 Switch between pushbutton (hold) and toggle (click) modes:
@@ -273,8 +276,8 @@ Test spray methods directly:
 from mission_controller.px4_interface import init_px4
 
 px4 = init_px4(fcu_url="udp://127.0.0.1:14540")
-px4.activate_spray(servo_channel=3, pwm_value=1900)
-px4.deactivate_spray(servo_channel=3)
+px4.activate_spray(actuator_slot=1, actuator_value=1.0)
+px4.deactivate_spray(actuator_slot=1)
 ```
 
 ### API Testing
@@ -287,12 +290,12 @@ curl http://localhost:5000/health
 # Activate spray
 curl -X POST http://localhost:5000/spray \
   -H "Content-Type: application/json" \
-  -d '{"action":"activate","channel":3,"pwm":1900}'
+  -d '{"action":"activate","channel":1,"value":1.0}'
 
 # Deactivate spray
 curl -X POST http://localhost:5000/spray \
   -H "Content-Type: application/json" \
-  -d '{"action":"deactivate","channel":3}'
+   -d '{"action":"deactivate","channel":1}'
 
 # Get spray status
 curl http://localhost:5000/spray/status
@@ -313,8 +316,8 @@ curl http://localhost:5000/spray/status
 - Check Flask installation: `pip show flask`
 
 ### Spray Command Fails
-- Verify servo channel is correct for your hardware
-- Check PX4 logs for MAV_CMD_DO_SET_SERVO errors
+- Verify the output is mapped to `Peripheral via Actuator Set 1`
+- Check PX4 logs for `MAV_CMD_DO_SET_ACTUATOR` errors
 - Ensure MAVROS CommandLong service is available
 
 ### Frontend Can't Connect to API
@@ -353,6 +356,6 @@ curl http://localhost:5000/spray/status
 ## References
 
 - MAVROS Documentation: http://wiki.ros.org/mavros
-- MAV_CMD_DO_SET_SERVO: https://mavlink.io/en/messages/common.html#MAV_CMD_DO_SET_SERVO
+- MAV_CMD_DO_SET_ACTUATOR: https://mavlink.io/en/messages/common.html#MAV_CMD_DO_SET_ACTUATOR
 - PX4 Flight Controller: https://px4.io/
 - Flask Documentation: https://flask.palletsprojects.com/

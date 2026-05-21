@@ -7,7 +7,12 @@ import numpy as np
 
 # The temporal-confirmation state machine is pipeline-agnostic, so we reuse
 # main.py's class rather than duplicate it. Keeps both paths in lockstep.
-from main import TemporalLock
+# Wrapped because consumers that only want detect() (e.g. the API server)
+# import this module from a different sys.path where `main` is not visible.
+try:
+    from main import TemporalLock
+except ImportError:
+    TemporalLock = None
 
 
 # Known-good values. calibration.json overrides any of these; if it is missing
@@ -21,25 +26,25 @@ DEFAULTS = {
     "tgt_a_lo": 145, "tgt_a_hi": 255,
     "tgt_b_lo": 110, "tgt_b_hi": 170,
     "kernel": 9,
-    "min_area": 3000,
+    "min_area": 80,
     # circularity is only a fallback shape gate for contours too small to fit
     # an ellipse; the main gate is ellipticity (tilt-invariant -- a circle at
     # any viewing angle is still a clean ellipse).
-    "circularity": 0.6,
+    "circularity": 0.4,
     "ellipticity_min": 0.80,
     "ellipticity_max": 1.25,
     # aspect only rejects extreme slivers; 0.25 still allows a very steeply
     # tilted (~75 deg, foreshortened) circular target.
     "aspect": 0.25,
-    "solidity": 0.9,
+    "solidity": 0.8,
     # Per-frame adaptation: derive L_lo from the frame's own histogram so
     # the mask tracks ambient brightness instead of relying on fixed floors.
     "adapt_floors": 1,
     # Depth-gated size check (lighting-invariant). A real target must have an
     # apparent pixel size consistent with a physical diameter in this range.
     # Target is 5-30 cm; tolerance band widened to absorb depth/contour noise.
-    "min_diameter_m": 0.03,
-    "max_diameter_m": 0.45,
+    "min_diameter_m": 0.015,
+    "max_diameter_m": 0.6,
     # Temporal lock: once a target is found, prefer candidates within this many
     # pixels of last frame's centroid so the box does not flicker between
     # similar-looking objects.
@@ -255,14 +260,15 @@ def annotate_target(frame, stats):
 
 
 def detect(frame, calib, verbose=False, depth_frame=None, fx=None,
-           prev_centroid=None, draw=True):
+           prev_centroid=None, draw=True, depth_m=None):
     blurred = cv2.GaussianBlur(frame, (5, 5), 0)
     lab = cv2.cvtColor(blurred, cv2.COLOR_BGR2LAB)
 
     # Convert the RealSense depth frame to a metric float32 array once, so the
     # depth size gate can slice it instead of calling get_distance per pixel.
-    depth_m = None
-    if depth_frame is not None:
+    # Callers running detection off-thread may pass depth_m directly, since
+    # pyrealsense2 frame objects are not safe to share across threads.
+    if depth_m is None and depth_frame is not None:
         depth_m = (np.asanyarray(depth_frame.get_data()).astype(np.float32)
                    * depth_frame.get_units())
 

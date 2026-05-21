@@ -4,6 +4,13 @@ ardupilot/
 
 # MediaMTX binary (arm64 — download separately, see README)
 /mediamtx
+
+# Runtime state — persisted target identities, regenerated per flight
+mission_controller/target_registry.json
+
+# Captured screenshots (depth/rgb/od views), one subfolder per capture
+screenshots/
+
 # pycache files
 __pycache__/
 **/__pycache__/

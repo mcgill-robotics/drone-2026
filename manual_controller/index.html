@@ -27,6 +27,7 @@
         <nav class="mode-tabs" role="tablist" aria-label="Drone modes">
             <button class="mode-tab active" role="tab" aria-selected="true" aria-controls="mode-mission-one" id="tab-mission-one" data-tab="mission-one">Mission One</button>
             <button class="mode-tab" role="tab" aria-selected="false" aria-controls="mode-mission-two" id="tab-mission-two" data-tab="mission-two">Mission Two</button>
+            <button class="mode-tab" role="tab" aria-selected="false" aria-controls="mode-captures" id="tab-captures" data-tab="captures">Captures</button>
         </nav>
 
         <div class="mode-panel active" id="mode-mission-one" role="tabpanel" aria-labelledby="tab-mission-one">
@@ -61,18 +62,20 @@
                         </div>
                     </section>
 
-                    <section class="screen" id="rtsp-camera">
+                    <section class="screen" id="front-camera">
                         <div class="screen-header">
-                            <h2>RTSP Camera</h2>
+                            <h2>Front Camera</h2>
                             <div class="screen-info">
-                                <span class="info-badge">1920×1080 · 30fps</span>
+                                <span class="info-badge" id="front-stream-status" data-state="connecting">Connecting…</span>
                             </div>
                         </div>
                         <div class="camera-container">
-                            <div class="camera-feed">
-                                <div class="placeholder-image rtsp-placeholder">
-                                    <div class="placeholder-text">RTSP Camera Stream</div>
-                                    <div class="placeholder-subtext">Waiting for connection…</div>
+                            <div class="camera-feed live-feed">
+                                <video id="front-camera-stream" class="live-camera-stream" autoplay muted playsinline></video>
+
+                                <div class="stream-overlay" id="front-camera-overlay">
+                                    <div class="placeholder-text">Front WebRTC Stream</div>
+                                    <div class="placeholder-subtext">Waiting for MediaMTX…</div>
                                 </div>
                             </div>
                         </div>
@@ -82,16 +85,10 @@
 
             <footer class="control-panel">
                 <div class="control-buttons">
-                    <button class="control-btn screenshot-btn" id="rgb-screenshot-btn" title="Capture RGB screenshot">
+                    <button class="control-btn screenshot-btn" id="screenshot-btn" title="Capture screenshot (Ctrl+S)">
                         <span class="btn-icon">📸</span>
-                        <span class="btn-text">RGB Screenshot</span>
-                        <span class="btn-shortcut">RGB</span>
-                    </button>
-
-                    <button class="control-btn screenshot-btn" id="depth-screenshot-btn" title="Capture depth screenshot">
-                        <span class="btn-icon">📸</span>
-                        <span class="btn-text">Depth Screenshot</span>
-                        <span class="btn-shortcut">Depth</span>
+                        <span class="btn-text">Screenshot</span>
+                        <span class="btn-shortcut"><kbd>Ctrl</kbd>+<kbd>S</kbd></span>
                     </button>
 
                     <button class="control-btn small-payload-btn" id="small-payload-btn" title="Release small payload">
@@ -124,6 +121,66 @@
             </main>
         </div>
 
+        <!-- Captures Mode: browse saved screenshots, measure depth, edit notes -->
+        <div class="mode-panel" id="mode-captures" role="tabpanel" aria-labelledby="tab-captures" hidden>
+            <main class="main-content captures-layout">
+                <section class="captures-gallery">
+                    <div class="captures-toolbar">
+                        <h2>Captures</h2>
+                        <button class="control-btn" id="captures-refresh" title="Reload the list">↻ Refresh</button>
+                    </div>
+                    <div class="captures-grid" id="captures-grid">
+                        <div class="captures-empty" id="captures-empty">No captures yet — take a screenshot in Mission One.</div>
+                    </div>
+                </section>
+
+                <section class="capture-detail" id="capture-detail" hidden>
+                    <div class="screen-header">
+                        <h2 id="capture-detail-title">Capture</h2>
+                        <div class="view-toggle" role="group" aria-label="Capture view">
+                            <button type="button" class="view-toggle-btn active" data-cap-view="rgb" aria-pressed="true">RGB</button>
+                            <button type="button" class="view-toggle-btn" data-cap-view="depth" aria-pressed="false">Depth</button>
+                            <button type="button" class="view-toggle-btn" data-cap-view="od" aria-pressed="false">Object Detection</button>
+                        </div>
+                    </div>
+                    <div class="capture-detail-body">
+                        <div class="capture-image-wrap">
+                            <img id="capture-detail-img" alt="Selected capture">
+                        </div>
+                        <div class="capture-side">
+                            <button class="control-btn" id="capture-measure-btn" title="Click two points to estimate distance">📏 Measure distance / depth</button>
+                            <label class="capture-notes-label" for="capture-notes">Details / notes (notes.txt)</label>
+                            <textarea id="capture-notes" class="capture-notes" placeholder="Notes for this capture — saved to notes.txt in the capture folder…"></textarea>
+                            <div class="capture-notes-actions">
+                                <button class="control-btn" id="capture-notes-save">💾 Save notes</button>
+                                <span class="capture-notes-status" id="capture-notes-status"></span>
+                            </div>
+                        </div>
+                    </div>
+                </section>
+            </main>
+        </div>
+
+        <!-- Measure modal: click two points on a captured frame to estimate distance -->
+        <div id="measure-modal" class="measure-modal" hidden>
+            <div class="measure-dialog" role="dialog" aria-modal="true" aria-label="Measure distance">
+                <div class="measure-header">
+                    <span class="measure-title">📏 Measure distance</span>
+                    <span class="measure-hint" id="measure-hint">Click two points on the image</span>
+                    <button class="measure-close" id="measure-close" title="Close (Esc)" aria-label="Close">✕</button>
+                </div>
+                <div class="measure-stage" id="measure-stage">
+                    <img id="measure-img" alt="Captured frame">
+                    <canvas id="measure-canvas"></canvas>
+                </div>
+                <div class="measure-footer">
+                    <span class="measure-readout" id="measure-readout">Click two points to measure…</span>
+                    <button class="control-btn" id="measure-reset">Reset points</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Toast Notifications -->
         <div id="toast-container" class="toast-container" aria-live="polite"></div>
     </div>
 
