@@ -277,17 +277,19 @@ function handleReleasePayload() {
 }
 
 function handleSmallPayload() {
-    console.log('[PAYLOAD] Small payload release requested');
-    fetch(`${API_CONFIG.baseUrl}/payload/small-release`, {
+    console.log('[PAYLOAD] Small motor toggle requested');
+    // For small payloads configured as a motor (ESC), request toggle/start/stop
+    // Use the unified /payload/small endpoint which supports action=start|stop|toggle
+    fetch(`${API_CONFIG.baseUrl}/payload/small`, {
         method: 'POST',
         headers: {
             'Content-Type': 'application/json'
         },
         body: JSON.stringify({
+            action: 'toggle',
             channel: 4,
-            release_pwm: 1900,
-            neutral_pwm: 1500,
-            pulse_seconds: 0.5
+            pwm_on: 1900,
+            neutral_pwm: 1500
         })
     })
         .then(response => response.json().then(data => ({ status: response.status, data })))
@@ -296,7 +298,7 @@ function handleSmallPayload() {
             console.log('[PAYLOAD] Small payload API response data:', data);
 
             if (data.success) {
-                showToast('Small payload released!', 'success');
+                showToast('Small motor toggled!', 'success');
             } else {
                 showToast('Small payload release failed: ' + (data.error || 'Unknown error'), 'error');
             }

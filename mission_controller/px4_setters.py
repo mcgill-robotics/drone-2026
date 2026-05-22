@@ -321,6 +321,48 @@ class PX4Setters:
             print(f"[PX4] Servo command failed for channel {servo_channel}: {str(e)}")
             return False
 
+    def _send_actuator_command(self, actuator_index, value, timeout=10):
+        """Send a MAV_CMD_DO_SET_ACTUATOR command for a motor/actuator output.
+
+        PX4/QGroundControl actuator configuration is the right path for outputs
+        configured as motors. The command uses normalized values instead of raw
+        PWM; for a single-direction motor, 0.0 is stop and 1.0 is full output.
+        """
+        if not self.connected:
+            print("[PX4] Not connected to MAVROS, cannot send actuator command")
+            return False
+
+        if not self.command_long_client.wait_for_service(timeout_sec=5):
+            print("[PX4] /cmd/command service unavailable")
+            return False
+
+        try:
+            req = CommandLong.Request()
+            req.command = 187  # MAV_CMD_DO_SET_ACTUATOR
+            req.confirmation = 0
+            req.param1 = float(value)
+            req.param2 = float('nan')
+            req.param3 = float('nan')
+            req.param4 = float('nan')
+            req.param5 = float('nan')
+            req.param6 = float('nan')
+            req.param7 = float(actuator_index)
+
+            future = self.command_long_client.call_async(req)
+            start = time.time()
+            while not future.done() and (time.time() - start) < timeout:
+                rclpy.spin_once(self, timeout_sec=0.1)
+                time.sleep(0.1)
+
+            if future.done() and future.result() and future.result().success:
+                return True
+
+            print(f"[PX4] Actuator command rejected for index {actuator_index}")
+            return False
+        except Exception as e:
+            print(f"[PX4] Actuator command failed for index {actuator_index}: {str(e)}")
+            return False
+
     def change_mode(self, mode_name, timeout=30):
         """
         Change vehicle flight mode
@@ -1043,6 +1085,53 @@ class PX4Setters:
             pulse_seconds=pulse_seconds,
             timeout=timeout,
         )
+
+    # --- Small motor control (for AUX configured as "Motor" in QGroundControl) ---
+    def start_small_motor(self, servo_channel=4, pwm_value=1900, timeout=10):
+        """
+        Start a small motor connected to the specified servo/PWM output.
+
+        This uses the actuator command path first because motors configured in
+        QGroundControl are not the same thing as servos. If the flight stack
+        rejects that command, we fall back to raw PWM for compatibility.
+        """
+        print(f"[PX4] Starting small motor on channel {servo_channel} (PWM: {pwm_value})")
+        ok = self._send_actuator_command(servo_channel, 1.0, timeout=timeout)
+        if not ok:
+            ok = self._send_servo_command(servo_channel, pwm_value, timeout=timeout)
+        if ok:
+            try:
+                self._small_motor_active = True
+            except Exception:
+                self._small_motor_active = True
+            return True
+        return False
+
+    def stop_small_motor(self, servo_channel=4, neutral_pwm=1500, timeout=10):
+        """
+        Stop the small motor by setting the channel back to neutral PWM.
+        """
+        print(f"[PX4] Stopping small motor on channel {servo_channel} (PWM: {neutral_pwm})")
+        ok = self._send_actuator_command(servo_channel, 0.0, timeout=timeout)
+        if not ok:
+            ok = self._send_servo_command(servo_channel, neutral_pwm, timeout=timeout)
+        if ok:
+            try:
+                self._small_motor_active = False
+            except Exception:
+                self._small_motor_active = False
+            return True
+        return False
+
+    def toggle_small_motor(self, servo_channel=4, pwm_on=1900, neutral_pwm=1500, timeout=10):
+        """
+        Toggle the small motor between ON (pwm_on) and neutral.
+        """
+        active = getattr(self, '_small_motor_active', False)
+        if active:
+            return self.stop_small_motor(servo_channel=servo_channel, neutral_pwm=neutral_pwm, timeout=timeout)
+        else:
+            return self.start_small_motor(servo_channel=servo_channel, pwm_value=pwm_on, timeout=timeout)
 
     def set_gimbal(self, yaw_pwm=1500, pitch_pwm=1500,
                 yaw_channel=8, pitch_channel=9, timeout=10):
