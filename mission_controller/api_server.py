@@ -747,6 +747,53 @@ def payload_small_release():
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
+@app.route('/payload/small', methods=['POST'])
+def payload_small_control():
+    """
+    Small payload actuator/motor control endpoint.
+
+    POST /payload/small
+    {
+        "action": "start" | "stop" | "toggle",  // default: toggle
+        "channel": 4,
+        "pwm_on": 1900,
+        "neutral_pwm": 1500
+    }
+
+    - For outputs configured as a motor (ESC) this will start/stop the motor by
+      writing PWM values. For servo-type small payloads, continue to use
+      /payload/small-release for a one-shot pulse.
+    """
+    if not px4_interface:
+        return jsonify({'success': False, 'error': 'PX4 interface not initialized'}), 503
+
+    try:
+        data = request.get_json(silent=True) or {}
+        action = (data.get('action') or 'toggle').lower()
+        channel = data.get('channel', 4)
+        pwm_on = data.get('pwm_on', 1900)
+        neutral_pwm = data.get('neutral_pwm', 1500)
+
+        if action == 'start':
+            success = px4_interface.start_small_motor(servo_channel=channel, pwm_value=pwm_on)
+        elif action == 'stop':
+            success = px4_interface.stop_small_motor(servo_channel=channel, neutral_pwm=neutral_pwm)
+        else:
+            success = px4_interface.toggle_small_motor(servo_channel=channel, pwm_on=pwm_on, neutral_pwm=neutral_pwm)
+
+        return jsonify({
+            'success': success,
+            'action': action,
+            'channel': channel,
+            'pwm_on': pwm_on,
+            'neutral_pwm': neutral_pwm,
+            'message': 'Small motor control executed' if success else 'Small motor control failed'
+        })
+    except Exception as e:
+        print(f"[API] Error in payload_small_control: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
 @app.route('/telemetry/position', methods=['GET'])
 def get_position():
     """Get current drone position."""
