@@ -1032,6 +1032,37 @@ document.addEventListener('DOMContentLoaded', () => {
     setInterval(() => refreshApiStatus(false), 10000);
 });
 
+let gimbalState = {
+    pitch: 0.0,
+    roll: 0.0,
+    yaw: 0.0
+};
+
+let gimbalUpdatePending = false;
+
+function sendGimbalUpdate() {
+    if (gimbalUpdatePending) return;
+    gimbalUpdatePending = true;
+
+    setTimeout(() => {
+        fetch(`${API_CONFIG.baseUrl}/api/action/set_gimbal`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(gimbalState)
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (!data.success) {
+                console.warn('[GIMBAL] Update failed:', data.error);
+            }
+        })
+        .catch(err => console.error('[GIMBAL] Network error:', err))
+        .finally(() => {
+            gimbalUpdatePending = false;
+        });
+    }, 50);
+}
+
 document.addEventListener('keydown', (e) => {
     if (e.key.toLowerCase() === 's' && e.ctrlKey) {
         e.preventDefault();
@@ -1053,6 +1084,38 @@ document.addEventListener('keydown', (e) => {
                 }
             });
         }
+    }
+
+    // Gimbal controls
+    if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.key)) {
+        e.preventDefault(); // Prevent page scrolling
+
+        const STEP = 5.0;
+
+        if (e.key === 'ArrowUp') {
+            gimbalState.pitch += STEP;
+        } else if (e.key === 'ArrowDown') {
+            gimbalState.pitch -= STEP;
+        } else if (e.key === 'ArrowLeft') {
+            if (e.shiftKey) {
+                gimbalState.roll -= STEP;
+            } else {
+                gimbalState.yaw -= STEP;
+            }
+        } else if (e.key === 'ArrowRight') {
+            if (e.shiftKey) {
+                gimbalState.roll += STEP;
+            } else {
+                gimbalState.yaw += STEP;
+            }
+        }
+
+        // Clamp values to reasonable gimbal limits
+        gimbalState.pitch = Math.max(-90, Math.min(90, gimbalState.pitch));
+        gimbalState.roll = Math.max(-90, Math.min(90, gimbalState.roll));
+        gimbalState.yaw = Math.max(-180, Math.min(180, gimbalState.yaw));
+
+        sendGimbalUpdate();
     }
 });
 
