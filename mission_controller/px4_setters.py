@@ -342,15 +342,21 @@ class PX4Setters:
             print(f"[PX4] Actuator command failed for slot {actuator_slot}: {str(e)}")
             return False
 
-    def _send_actuator_command(self, actuator_index, value, timeout=10):
-        """Send a MAV_CMD_DO_SET_ACTUATOR command for a motor/actuator output.
-
-        PX4/QGroundControl actuator configuration is the right path for outputs
-        configured as motors. The command uses normalized values instead of raw
-        PWM; for a single-direction motor, 0.0 is stop and 1.0 is full output.
+    def set_gimbal_angles(self, pitch_deg=0.0, roll_deg=0.0, yaw_deg=0.0, timeout=10):
+        """
+        Send a MAV_CMD_DO_MOUNT_CONTROL command to PX4 to control a gimbal.
+        
+        Requires the vmount driver to be running on PX4, and QGroundControl
+        must be configured to output MAVLink targeting to the chosen PWM pins.
+        
+        MAV_CMD_DO_MOUNT_CONTROL (205)
+        param1: pitch (degrees)
+        param2: roll (degrees)
+        param3: yaw (degrees)
+        param7: mount mode (MAV_MOUNT_MODE_MAVLINK_TARGETING = 2)
         """
         if not self.connected:
-            print("[PX4] Not connected to MAVROS, cannot send actuator command")
+            print("[PX4] Not connected to MAVROS, cannot set gimbal")
             return False
 
         if not self.command_long_client.wait_for_service(timeout_sec=5):
@@ -359,15 +365,15 @@ class PX4Setters:
 
         try:
             req = CommandLong.Request()
-            req.command = 187  # MAV_CMD_DO_SET_ACTUATOR
+            req.command = 205  # MAV_CMD_DO_MOUNT_CONTROL
             req.confirmation = 0
-            req.param1 = float(value)
-            req.param2 = float('nan')
-            req.param3 = float('nan')
-            req.param4 = float('nan')
-            req.param5 = float('nan')
-            req.param6 = float('nan')
-            req.param7 = float(actuator_index)
+            req.param1 = float(pitch_deg)
+            req.param2 = float(roll_deg)
+            req.param3 = float(yaw_deg)
+            req.param4 = 0.0
+            req.param5 = 0.0
+            req.param6 = 0.0
+            req.param7 = 2.0  # MAV_MOUNT_MODE_MAVLINK_TARGETING
 
             future = self.command_long_client.call_async(req)
             start = time.time()
@@ -376,12 +382,13 @@ class PX4Setters:
                 time.sleep(0.1)
 
             if future.done() and future.result() and future.result().success:
+                print(f"[PX4] Gimbal angles set: pitch={pitch_deg:.1f} roll={roll_deg:.1f} yaw={yaw_deg:.1f}")
                 return True
 
-            print(f"[PX4] Actuator command rejected for index {actuator_index}")
+            print(f"[PX4] Gimbal command rejected")
             return False
         except Exception as e:
-            print(f"[PX4] Actuator command failed for index {actuator_index}: {str(e)}")
+            print(f"[PX4] Gimbal command failed: {str(e)}")
             return False
 
     def change_mode(self, mode_name, timeout=30):

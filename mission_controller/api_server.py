@@ -1234,6 +1234,43 @@ def payload_small_control():
         })
     except Exception as e:
         print(f"[API] Error in payload_small_control: {e}")
+
+@app.route('/api/action/set_gimbal', methods=['POST'])
+def set_gimbal():
+    """
+    Set gimbal angles via PX4 DO_MOUNT_CONTROL.
+    
+    POST /api/action/set_gimbal
+    {
+        "pitch": 45.0,  // Optional: pitch angle in degrees (default 0.0)
+        "roll": 0.0,    // Optional: roll angle in degrees (default 0.0)
+        "yaw": 90.0     // Optional: yaw angle in degrees (default 0.0)
+    }
+    """
+    if not px4_interface:
+        return jsonify({'success': False, 'error': 'PX4 interface not initialized'}), 503
+
+    try:
+        data = request.get_json(silent=True) or {}
+        pitch = data.get('pitch', 0.0)
+        roll = data.get('roll', 0.0)
+        yaw = data.get('yaw', 0.0)
+
+        success = px4_interface.set_gimbal_angles(pitch_deg=pitch, roll_deg=roll, yaw_deg=yaw)
+
+        return jsonify({
+            'success': success,
+            'action': 'set_gimbal',
+            'pitch': pitch,
+            'roll': roll,
+            'yaw': yaw,
+            'message': 'Gimbal angles set' if success else 'Gimbal angle command failed'
+        })
+    except Exception as e:
+        print(f"[API] Error in set_gimbal: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
 @app.route('/gimbal/aim', methods=['POST'])
 def gimbal_aim():
     """Record the gimbal's commanded angles for georeferencing.
