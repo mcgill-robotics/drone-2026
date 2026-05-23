@@ -570,7 +570,7 @@ def _start_stream_publisher(view_name):
         print(f'[API] ffmpeg not found; cannot publish {view_name} stream to MediaMTX')
         return False
 
-    stream_url = f'rtmp://127.0.0.1:1935/{view_name}'
+    stream_url = f'rtsp://127.0.0.1:8559/{view_name}'
     cmd = [
         ffmpeg_binary,
         '-loglevel', 'error',
@@ -583,10 +583,13 @@ def _start_stream_publisher(view_name):
         '-c:v', 'libx264',
         '-preset', 'ultrafast',
         '-tune', 'zerolatency',
-        '-g', '1',
+        '-profile:v', 'baseline',
+        '-g', '30',
+        '-bf', '0',
         '-sc_threshold', '0',
         '-pix_fmt', 'yuv420p',
-        '-f', 'flv',
+        '-f', 'rtsp',
+        '-rtsp_transport', 'tcp',
         stream_url,
     ]
 
