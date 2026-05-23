@@ -1032,35 +1032,51 @@ document.addEventListener('DOMContentLoaded', () => {
     setInterval(() => refreshApiStatus(false), 10000);
 });
 
-let gimbalState = {
-    pitch: 0.0,
-    roll: 0.0,
-    yaw: 0.0
-};
-
+let gimbalActiveKeys = new Set();
 let gimbalUpdatePending = false;
+let nextGimbalUpdate = null;
 
-function sendGimbalUpdate() {
-    if (gimbalUpdatePending) return;
+function sendContinuousGimbalUpdate() {
+    let pitch = 1500;
+    let yaw = 1500;
+
+    if (gimbalActiveKeys.has('ArrowUp')) pitch = 1600;
+    if (gimbalActiveKeys.has('ArrowDown')) pitch = 1400;
+    if (gimbalActiveKeys.has('ArrowLeft')) yaw = 1400;
+    if (gimbalActiveKeys.has('ArrowRight')) yaw = 1600;
+
+    const payload = {
+        pitch_pwm: pitch,
+        yaw_pwm: yaw
+    };
+
+    if (gimbalUpdatePending) {
+        nextGimbalUpdate = payload;
+        return;
+    }
+
     gimbalUpdatePending = true;
 
-    setTimeout(() => {
-        fetch(`${API_CONFIG.baseUrl}/api/action/set_gimbal`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(gimbalState)
-        })
-        .then(response => response.json())
-        .then(data => {
-            if (!data.success) {
-                console.warn('[GIMBAL] Update failed:', data.error);
-            }
-        })
-        .catch(err => console.error('[GIMBAL] Network error:', err))
-        .finally(() => {
-            gimbalUpdatePending = false;
-        });
-    }, 50);
+    fetch(`${API_CONFIG.baseUrl}/gimbal/set`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (!data.success) {
+            console.warn('[GIMBAL] PWM update failed:', data.error);
+        }
+    })
+    .catch(err => console.error('[GIMBAL] Network error:', err))
+    .finally(() => {
+        gimbalUpdatePending = false;
+        if (nextGimbalUpdate) {
+            const temp = nextGimbalUpdate;
+            nextGimbalUpdate = null;
+            sendContinuousGimbalUpdate();
+        }
+    });
 }
 
 document.addEventListener('keydown', (e) => {
@@ -1086,36 +1102,14 @@ document.addEventListener('keydown', (e) => {
         }
     }
 
-    // Gimbal controls
+    // Continuous Gimbal Controls (Start)
     if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.key)) {
         e.preventDefault(); // Prevent page scrolling
 
-        const STEP = 5.0;
-
-        if (e.key === 'ArrowUp') {
-            gimbalState.pitch += STEP;
-        } else if (e.key === 'ArrowDown') {
-            gimbalState.pitch -= STEP;
-        } else if (e.key === 'ArrowLeft') {
-            if (e.shiftKey) {
-                gimbalState.roll -= STEP;
-            } else {
-                gimbalState.yaw -= STEP;
-            }
-        } else if (e.key === 'ArrowRight') {
-            if (e.shiftKey) {
-                gimbalState.roll += STEP;
-            } else {
-                gimbalState.yaw += STEP;
-            }
+        if (!gimbalActiveKeys.has(e.key)) {
+            gimbalActiveKeys.add(e.key);
+            sendContinuousGimbalUpdate();
         }
-
-        // Clamp values to reasonable gimbal limits
-        gimbalState.pitch = Math.max(-90, Math.min(90, gimbalState.pitch));
-        gimbalState.roll = Math.max(-90, Math.min(90, gimbalState.roll));
-        gimbalState.yaw = Math.max(-180, Math.min(180, gimbalState.yaw));
-
-        sendGimbalUpdate();
     }
 });
 
@@ -1127,6 +1121,16 @@ document.addEventListener('keyup', (e) => {
                     showToast('Water spray stopped', 'info');
                 }
             });
+        }
+    }
+
+    // Continuous Gimbal Controls (Stop)
+    if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.key)) {
+        e.preventDefault();
+        
+        if (gimbalActiveKeys.has(e.key)) {
+            gimbalActiveKeys.delete(e.key);
+            sendContinuousGimbalUpdate();
         }
     }
 });
