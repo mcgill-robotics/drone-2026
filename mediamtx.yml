@@ -23,5 +23,5 @@ paths:
   # NOTE: source: expects a URL, not a command — an ffmpeg pipeline must run via
   # runOnInit. $RTSP_PORT is substituted by MediaMTX (matches rtspAddress above).
   front_clean:
-    runOnInit: ffmpeg -i rtsp://192.168.144.25:8554/main.264 -c:v libx264 -preset ultrafast -profile:v baseline -tune zerolatency -f rtsp rtsp://localhost:$RTSP_PORT/front_clean
+    runOnInit: ffmpeg -rtsp_transport tcp -i rtsp://192.168.144.25:8554/main.264 -vf "eq=brightness=0.08:contrast=1.25:saturation=1.2,unsharp=5:5:0.8" -c:v libx264 -preset ultrafast -profile:v baseline -tune zerolatency -f rtsp rtsp://localhost:$RTSP_PORT/front_clean
     runOnInitRestart: yes
