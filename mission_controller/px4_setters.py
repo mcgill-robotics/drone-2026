@@ -342,6 +342,52 @@ class PX4Setters:
             print(f"[PX4] Actuator command failed for slot {actuator_slot}: {str(e)}")
             return False
 
+    def _send_servo_command(self, servo_channel, pwm_value, timeout=10):
+        """Send a MAV_CMD_DO_SET_SERVO command to a PX4 servo output."""
+        if not self.connected:
+            print("[PX4] Not connected to MAVROS, cannot send servo command")
+            return False
+
+        if not self.command_long_client.wait_for_service(timeout_sec=5):
+            print("[PX4] /cmd/command service unavailable")
+            return False
+
+        try:
+            req = CommandLong.Request()
+            req.command = 183  # MAV_CMD_DO_SET_SERVO
+            req.confirmation = 0
+            req.param1 = float(servo_channel)
+            req.param2 = float(pwm_value)
+            req.param3 = 0.0
+            req.param4 = 0.0
+            req.param5 = 0.0
+            req.param6 = 0.0
+            req.param7 = 0.0
+
+            future = self.command_long_client.call_async(req)
+            start = time.time()
+            while not future.done() and (time.time() - start) < timeout:
+                time.sleep(0.02)
+
+            if future.done() and future.result() and future.result().success:
+                return True
+
+            if future.done() and future.result():
+                result_code = getattr(future.result(), 'result', 'n/a')
+                print(
+                    f"[PX4] Servo command rejected for channel {servo_channel} "
+                    f"(pwm={pwm_value}, MAV_RESULT={result_code})"
+                )
+            else:
+                print(
+                    f"[PX4] Servo command timed out for channel {servo_channel} "
+                    f"(pwm={pwm_value})"
+                )
+            return False
+        except Exception as e:
+            print(f"[PX4] Servo command failed for channel {servo_channel}: {str(e)}")
+            return False
+
     def set_gimbal_angles(self, pitch_deg=0.0, roll_deg=0.0, yaw_deg=0.0, timeout=10):
         """
         Send a MAV_CMD_DO_MOUNT_CONTROL command to PX4 to control a gimbal.
