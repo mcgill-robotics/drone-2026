@@ -1446,15 +1446,8 @@ def main():
         if args.sitl:
             fcu_url = "udp://127.0.0.1:14540"
         else:
-            # fcu_url = "serial:///dev/ttyTHS1:921600"
-            # Bind locally on 0.0.0.0:14550 (the port the FCU broadcasts MAVLink
-            # to) and send commands back to the FCU at 192.168.144.10:14550.
-            # Grammar: udp://[bind_host]:[bind_port]@[remote_host]:[remote_port].
-            # The old "udp://@14550:14550" left the bind side (before '@') empty,
-            # so MAVROS bound its default port (14555) instead of 14550 and never
-            # saw the heartbeat. Drop the remote half (use "udp://0.0.0.0:14550@")
-            # to auto-learn the FCU address if its IP isn't fixed.
-            fcu_url = "udp://0.0.0.0:14550@192.168.144.10:14550"
+            # THIS IS THE ETHERNET IP ADDRESS. do ipfconfig and use inet
+            fcu_url = "udp://192.168.144.11:14550@"
     print(f"[API] Starting API server...")
     print(f"[API] Port: {args.port}")
     print(f"[API] FCU URL: {fcu_url}")
