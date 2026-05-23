@@ -100,7 +100,7 @@ let sprayState = {
 const WHEP_URLS = {
     depth: () => `http://${API_CONFIG.host}:8889/depth/whep`,
     rgb:   () => `http://${API_CONFIG.host}:8889/rgb/whep`,
-    front: () => `http://${API_CONFIG.host}:8889/front_clean/whep`,
+    front: () => `http://${API_CONFIG.host}:8889/rgb/whep`,
 };
 // Object Detection shares the RGB stream — overlay is drawn client-side.
 const STREAM_FOR_VIEW = {

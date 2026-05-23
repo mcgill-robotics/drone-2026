@@ -1422,6 +1422,25 @@ def depth_distance_stream():
         },
     )
 
+def _cleanup_stale_processes():
+    """Best-effort cleanup from previous runs."""
+    patterns = [
+        "mediamtx",
+        "ffmpeg.*rtmp://127.0.0.1:1935",
+    ]
+
+    for pattern in patterns:
+        try:
+            subprocess.run(
+                ["pkill", "-f", pattern],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                check=False,
+            )
+            print(f"[API] Cleaned stale process pattern: {pattern}")
+        except Exception as e:
+            print(f"[API] Cleanup skipped for {pattern}: {e}")
+
 def main():
     """Main entry point."""
     parser = argparse.ArgumentParser(
@@ -1470,8 +1489,9 @@ def main():
         print("[API] Failed to initialize PX4 interface")
         sys.exit(1)
 
+    _cleanup_stale_processes() # cleanup environment, kill prev nodes
     _start_camera_streams()
-    
+
     # Start ROS spin thread
     global px4_thread
     px4_thread = threading.Thread(target=ros_spin_thread, daemon=True)
