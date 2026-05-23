@@ -1506,7 +1506,7 @@ def main():
             fcu_url = "udp://127.0.0.1:14540"
         else:
             # THIS IS THE ETHERNET IP ADDRESS. do ipfconfig and use inet
-            fcu_url = "udp://:14445@"
+            fcu_url = "udp://192.168.144.11:14445@"
     print(f"[API] Starting API server...")
     print(f"[API] Port: {args.port}")
     print(f"[API] FCU URL: {fcu_url}")
