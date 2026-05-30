@@ -1,10 +1,15 @@
 # drone-2026
 Welcome to the McGill Drone 2026 repository!
+
+# Competition Documentation
 Head to the [wiki](https://github.com/mcgill-robotics/drone-2026/wiki) for setup documentation and general info.
 
-
 # Who we are
-McGill Robotics is a student-led engineering design team dedicated to the development of competition and research robots. Composed of approximately 200 students across three major projects: Autonomous Underwater Vehicle, Mars Rover, and Unmanned Aerial Vehicle. The team’s mission is to inspire students through inclusive access to technical resources, mentorship, and hands-on learning. As the youngest initiative, the McGill Robotics Drone Team embodies the organization’s commitment to innovation and technical growth. The team is comprised of roughly 40 members collaborating across subteams and is participating in the AEAC competition for the first time with the development of an electric VTOL aircraft. Guided by the motto “Team Before Machine,” the team emphasizes collaboration, sustainability, and responsible engineering practices.
+McGill Robotics is a student-led engineering design team dedicated to the development of competition and research robots. Composed of approximately 200 students across three major projects: Autonomous Underwater Vehicle, Mars Rover, and Unmanned Aerial Vehicle. The team's mission is to inspire students through inclusive access to technical resources, mentorship, and hands-on learning. As the youngest initiative, the McGill Robotics Drone Team embodies the organization's commitment to innovation and technical growth. The team is comprised of roughly 40 members collaborating across subteams and is participating in the AEAC competition for the first time with the development of an electric VTOL aircraft. Guided by the motto "Team Before Machine," the team emphasizes collaboration, sustainability, and responsible engineering practices.
+
+# Competition Resources
+- **Competition Website:** [Aerial Evolution Annual Student Competition](https://www.aerialevolution.ca/annual-student-competition/)
+- **Competition Documentation:** [2026 AEAC CONOPS v1.3](https://www.aerialevolution.ca/wp-content/uploads/2026/03/2026-AEAC-CONOPS-v1.3-2026-03-03.pdf)
 
 # Competition details
 ## Task 1: Fire Reconnaissance

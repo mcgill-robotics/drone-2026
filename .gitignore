@@ -235,5 +235,8 @@ __marimo__/
 # Streamlit
 .streamlit/secrets.toml
 
+# VS Code
+c_cpp_properties.json
+
 .DS_Store
 .DS_Store

@@ -67,7 +67,7 @@ id is what `remove_obstacle` takes.
 from oa_bridge.oa_core import (
     StaticObstacleAvoider, CircleObstacle, PolygonObstacle, load_obstacles
 )
-from mission_controller.controller import MissionController
+from mission_controller.px4_interface import init_px4
 
 # Option A: build in code
 avoider = StaticObstacleAvoider(
