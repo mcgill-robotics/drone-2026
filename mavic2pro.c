@@ -27,11 +27,12 @@
 #include <webots/inertial_unit.h>
 #include <webots/keyboard.h>
 #include <webots/led.h>
-#include <webots/lidar.h>   // ADD THIS - lidar header
+#include <webots/lidar.h>
 #include <webots/motor.h>
 
 #define SIGN(x) ((x) > 0) - ((x) < 0)
-#define CLAMP(value, low, high) ((value) < (low) ? (low) : ((value) > (high) ? (high) : (value)))
+#define CLAMP(value, low, high)                                                \
+  ((value) < (low) ? (low) : ((value) > (high) ? (high) : (value)))
 
 int main(int argc, char **argv) {
   wb_robot_init();
@@ -54,7 +55,7 @@ int main(int argc, char **argv) {
   WbDeviceTag camera_roll_motor = wb_robot_get_device("camera roll");
   WbDeviceTag camera_pitch_motor = wb_robot_get_device("camera pitch");
 
-  // ADD THIS - enable lidar and point cloud (point cloud also shows visually in 3D view)
+  // ADD THIS - enable lidar and point cloud (visual in 3D view)
   WbDeviceTag lidar = wb_robot_get_device("lidar");
   wb_lidar_enable(lidar, timestep);
   wb_lidar_enable_point_cloud(lidar);
@@ -64,7 +65,8 @@ int main(int argc, char **argv) {
   WbDeviceTag front_right_motor = wb_robot_get_device("front right propeller");
   WbDeviceTag rear_left_motor = wb_robot_get_device("rear left propeller");
   WbDeviceTag rear_right_motor = wb_robot_get_device("rear right propeller");
-  WbDeviceTag motors[4] = {front_left_motor, front_right_motor, rear_left_motor, rear_right_motor};
+  WbDeviceTag motors[4] = {front_left_motor, front_right_motor, rear_left_motor,
+                           rear_right_motor};
   int m;
   for (m = 0; m < 4; ++m) {
     wb_motor_set_position(motors[m], INFINITY);
@@ -95,11 +97,11 @@ int main(int argc, char **argv) {
 
   double target_altitude = 1.0;
 
-  // ADD THIS - counter to print lidar data only every N steps (not every step or it floods the console)
+  // ADD THIS - print lidar data only every N steps.
   int lidar_print_counter = 0;
-  FILE *lidar_file = fopen("lidar_log.csv", "w");  
+  FILE *lidar_file = fopen("lidar_log.csv", "w");
   if (lidar_file == NULL) {
-      printf("ERROR: could not open lidar_log.csv for writing\n");
+    printf("ERROR: could not open lidar_log.csv for writing\n");
   }
   if (lidar_file != NULL)
     setvbuf(lidar_file, NULL, _IONBF, 0);
@@ -113,7 +115,7 @@ int main(int argc, char **argv) {
     const double altitude = wb_gps_get_values(gps)[2];
     const double roll_velocity = wb_gyro_get_values(gyro)[0];
     const double pitch_velocity = wb_gyro_get_values(gyro)[1];
-    
+
     const bool led_state = ((int)time) % 2;
     wb_led_set(front_left_led, led_state);
     wb_led_set(front_right_led, !led_state);
@@ -137,12 +139,16 @@ int main(int argc, char **argv) {
         float x = point_cloud[i].x;
         float y = point_cloud[i].y;
         float z = point_cloud[i].z;
-        float dist = sqrtf(x*x + y*y + z*z);  // distance from drone to that point
-        // printf("  point[%d]: x=%.2f y=%.2f z=%.2f  dist=%.2f m\n", i, x, y, z, dist);
-        printf("%.4f,%.4f,%.4f,%.4f,%.4f\n",wb_robot_get_time(), x, y, z, dist);
+        // distance from drone to that point
+        float dist = sqrtf(x * x + y * y + z * z);
+        // printf("  point[%d]: x=%.2f y=%.2f z=%.2f\n", i, x, y, z);
+        // printf("  dist=%.2f m\n", dist);
+        printf("%.4f,%.4f,%.4f,%.4f,%.4f\n", wb_robot_get_time(), x, y, z,
+               dist);
         if (lidar_file != NULL) {
-          fprintf(lidar_file, "%.4f,%.4f,%.4f,%.4f,%.4f\n",wb_robot_get_time(), x, y, z, dist);
-          }
+          fprintf(lidar_file, "%.4f,%.4f,%.4f,%.4f,%.4f\n", wb_robot_get_time(),
+                  x, y, z, dist);
+        }
       }
     }
 
@@ -152,46 +158,54 @@ int main(int argc, char **argv) {
     int key = wb_keyboard_get_key();
     while (key > 0) {
       switch (key) {
-        case WB_KEYBOARD_UP:
-          pitch_disturbance = -2.0;
-          break;
-        case WB_KEYBOARD_DOWN:
-          pitch_disturbance = 2.0;
-          break;
-        case WB_KEYBOARD_RIGHT:
-          yaw_disturbance = -1.3;
-          break;
-        case WB_KEYBOARD_LEFT:
-          yaw_disturbance = 1.3;
-          break;
-        case (WB_KEYBOARD_SHIFT + WB_KEYBOARD_RIGHT):
-          roll_disturbance = -1.0;
-          break;
-        case (WB_KEYBOARD_SHIFT + WB_KEYBOARD_LEFT):
-          roll_disturbance = 1.0;
-          break;
-        case (WB_KEYBOARD_SHIFT + WB_KEYBOARD_UP):
-          target_altitude += 0.05;
-          // printf("target altitude: %f [m]\n", target_altitude);
-          break;
-        case (WB_KEYBOARD_SHIFT + WB_KEYBOARD_DOWN):
-          target_altitude -= 0.05;
-          // printf("target altitude: %f [m]\n", target_altitude);
-          break;
+      case WB_KEYBOARD_UP:
+        pitch_disturbance = -2.0;
+        break;
+      case WB_KEYBOARD_DOWN:
+        pitch_disturbance = 2.0;
+        break;
+      case WB_KEYBOARD_RIGHT:
+        yaw_disturbance = -1.3;
+        break;
+      case WB_KEYBOARD_LEFT:
+        yaw_disturbance = 1.3;
+        break;
+      case (WB_KEYBOARD_SHIFT + WB_KEYBOARD_RIGHT):
+        roll_disturbance = -1.0;
+        break;
+      case (WB_KEYBOARD_SHIFT + WB_KEYBOARD_LEFT):
+        roll_disturbance = 1.0;
+        break;
+      case (WB_KEYBOARD_SHIFT + WB_KEYBOARD_UP):
+        target_altitude += 0.05;
+        // printf("target altitude: %f [m]\n", target_altitude);
+        break;
+      case (WB_KEYBOARD_SHIFT + WB_KEYBOARD_DOWN):
+        target_altitude -= 0.05;
+        // printf("target altitude: %f [m]\n", target_altitude);
+        break;
       }
       key = wb_keyboard_get_key();
     }
 
-    const double roll_input = k_roll_p * CLAMP(roll, -1.0, 1.0) + roll_velocity + roll_disturbance;
-    const double pitch_input = k_pitch_p * CLAMP(pitch, -1.0, 1.0) + pitch_velocity + pitch_disturbance;
+    const double roll_input =
+        k_roll_p * CLAMP(roll, -1.0, 1.0) + roll_velocity + roll_disturbance;
+    const double pitch_input = k_pitch_p * CLAMP(pitch, -1.0, 1.0) +
+                               pitch_velocity + pitch_disturbance;
     const double yaw_input = yaw_disturbance;
-    const double clamped_difference_altitude = CLAMP(target_altitude - altitude + k_vertical_offset, -1.0, 1.0);
-    const double vertical_input = k_vertical_p * pow(clamped_difference_altitude, 3.0);
+    const double clamped_difference_altitude =
+        CLAMP(target_altitude - altitude + k_vertical_offset, -1.0, 1.0);
+    const double vertical_input =
+        k_vertical_p * pow(clamped_difference_altitude, 3.0);
 
-    const double front_left_motor_input = k_vertical_thrust + vertical_input - roll_input + pitch_input - yaw_input;
-    const double front_right_motor_input = k_vertical_thrust + vertical_input + roll_input + pitch_input + yaw_input;
-    const double rear_left_motor_input = k_vertical_thrust + vertical_input - roll_input - pitch_input + yaw_input;
-    const double rear_right_motor_input = k_vertical_thrust + vertical_input + roll_input - pitch_input - yaw_input;
+    const double front_left_motor_input = k_vertical_thrust + vertical_input -
+                                          roll_input + pitch_input - yaw_input;
+    const double front_right_motor_input = k_vertical_thrust + vertical_input +
+                                           roll_input + pitch_input + yaw_input;
+    const double rear_left_motor_input = k_vertical_thrust + vertical_input -
+                                         roll_input - pitch_input + yaw_input;
+    const double rear_right_motor_input = k_vertical_thrust + vertical_input +
+                                          roll_input - pitch_input - yaw_input;
     wb_motor_set_velocity(front_left_motor, front_left_motor_input);
     wb_motor_set_velocity(front_right_motor, -front_right_motor_input);
     wb_motor_set_velocity(rear_left_motor, -rear_left_motor_input);
